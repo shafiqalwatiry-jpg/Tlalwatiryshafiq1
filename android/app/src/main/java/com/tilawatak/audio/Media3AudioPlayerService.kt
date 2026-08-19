@@ -187,9 +187,10 @@ class Media3AudioPlayerService(
                 recitationRepository.recordListenEvent(
                     ListenEvent(
                         recitationId = current.id,
+                        reciterId = current.reciterId,
                         durationSeconds = _playbackState.value.currentPositionSeconds,
-                        isCompleted = isCompleted,
-                        timestamp = System.currentTimeMillis()
+                        completed = isCompleted,
+                        timestampEpochMs = System.currentTimeMillis()
                     )
                 )
             } catch (_: Exception) {}

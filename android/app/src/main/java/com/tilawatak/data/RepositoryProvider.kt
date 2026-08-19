@@ -62,7 +62,15 @@ class RepositoryProvider(
     private val mockCompetitionRepo by lazy { MockCompetitionRepository() }
     private val mockRewardRepo by lazy { MockRewardRepository() }
     private val mockAdminAuthRepo by lazy { MockAdminAuthRepository() }
-    private val mockAdminRepo by lazy { MockAdminRepository(mockNotificationRepo) }
+    private val mockAdminRepo by lazy {
+        MockAdminRepository(
+            reciterRepository = mockReciterRepo,
+            recitationRepository = mockRecitationRepo,
+            submissionRepository = mockSubmissionRepo,
+            announcementRepository = mockAnnouncementRepo,
+            competitionRepository = mockCompetitionRepo
+        )
+    }
 
     // Supabase Live implementations
     private val supabaseReciterRepo by lazy { SupabaseReciterRepository() }

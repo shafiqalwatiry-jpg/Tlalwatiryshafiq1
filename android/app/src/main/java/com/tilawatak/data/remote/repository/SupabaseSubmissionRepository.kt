@@ -16,7 +16,7 @@ import java.util.UUID
 
 class SupabaseSubmissionRepository : ISubmissionRepository {
 
-    private val _userSubmissions = MutableStateFlow<List<RecitationSubmission>>(MockData.SUBMISSIONS)
+    private val _userSubmissions = MutableStateFlow<List<RecitationSubmission>>(MockData.INITIAL_SUBMISSIONS)
 
     override fun getUserSubmissions(): Flow<List<RecitationSubmission>> {
         return _userSubmissions.asStateFlow()
