@@ -32,7 +32,7 @@ class SupabaseSubmissionRepository : ISubmissionRepository {
         val storagePath = if (submission.audioStoragePath.isNotBlank()) {
             submission.audioStoragePath
         } else {
-            "submissions/${submissionId}.mp3"
+            "pending/${System.currentTimeMillis()}_${submissionId}.mp3"
         }
 
         val submissionToPersist = submission.copy(
@@ -42,27 +42,62 @@ class SupabaseSubmissionRepository : ISubmissionRepository {
             submittedAtEpochMs = System.currentTimeMillis()
         )
 
+        // Strategy 1: Call secure RPC submit_recitation_public (Bypasses table RLS via SECURITY DEFINER)
+        val rpcPayload = org.json.JSONObject().apply {
+            put("p_display_name", submissionToPersist.displayName)
+            if (!submissionToPersist.pseudonym.isNullOrBlank()) {
+                put("p_pseudonym", submissionToPersist.pseudonym)
+            } else {
+                put("p_pseudonym", org.json.JSONObject.NULL)
+            }
+            put("p_use_pseudonym", submissionToPersist.usePseudonym)
+            put("p_gender", submissionToPersist.gender.name)
+            put("p_country", submissionToPersist.country)
+            if (!submissionToPersist.profileImagePath.isNullOrBlank()) {
+                put("p_profile_image_path", submissionToPersist.profileImagePath)
+            } else {
+                put("p_profile_image_path", org.json.JSONObject.NULL)
+            }
+            put("p_surah_number", submissionToPersist.surahNumber)
+            put("p_surah_name", submissionToPersist.surahName)
+            put("p_ayah_start", submissionToPersist.ayahStart)
+            put("p_ayah_end", submissionToPersist.ayahEnd)
+            put("p_riwayah", submissionToPersist.riwayah)
+            put("p_description", submissionToPersist.description)
+            put("p_audio_storage_path", submissionToPersist.audioStoragePath)
+            if (!submissionToPersist.externalAudioUrl.isNullOrBlank()) {
+                put("p_external_audio_url", submissionToPersist.externalAudioUrl)
+            } else {
+                put("p_external_audio_url", org.json.JSONObject.NULL)
+            }
+        }
+
+        val rpcResult = SupabaseHttpClient.rpc(SupabaseContracts.RPC_SUBMIT_RECITATION, rpcPayload)
+        if (rpcResult.isSuccess) {
+            val jsonStr = rpcResult.getOrNull() ?: ""
+            val createdId = jsonStr.replace("\"", "").trim()
+            val finalSubmission = submissionToPersist.copy(id = if (createdId.isNotBlank()) createdId else submissionId)
+            _userSubmissions.update { current -> listOf(finalSubmission) + current }
+            return Result.success(finalSubmission)
+        }
+
+        // Strategy 2: Direct REST POST with Prefer: return=minimal
         val jsonPayload = SupabaseDtoMappers.mapSubmissionToJson(submissionToPersist)
-        val response = SupabaseHttpClient.post(
+        val restResponse = SupabaseHttpClient.post(
             endpoint = SupabaseContracts.TABLE_SUBMISSIONS,
             jsonBody = jsonPayload.toString(),
-            preferReturnRepresentation = true
+            preferReturnRepresentation = false
         )
 
-        return response.mapCatching { jsonStr ->
-            val jsonArray = JSONArray(jsonStr)
-            val createdId = if (jsonArray.length() > 0) {
-                jsonArray.getJSONObject(0).optString("id", submissionId)
-            } else submissionId
-
-            val resultSubmission = submissionToPersist.copy(id = createdId)
-            _userSubmissions.update { current -> listOf(resultSubmission) + current }
-            resultSubmission
-        }.recoverCatching {
-            // Fallback for offline mode or network issues
+        if (restResponse.isSuccess) {
             _userSubmissions.update { current -> listOf(submissionToPersist) + current }
-            submissionToPersist
+            return Result.success(submissionToPersist)
         }
+
+        val error = restResponse.exceptionOrNull()
+            ?: rpcResult.exceptionOrNull()
+            ?: Exception("تعذر إرسال التلاوة، تحقق من الاتصال بالإنترنت وحاول مرة أخرى")
+        return Result.failure(error)
     }
 
     /**

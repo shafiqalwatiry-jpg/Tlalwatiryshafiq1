@@ -16,7 +16,7 @@ object SupabaseConfig {
 
     const val DEFAULT_SUPABASE_URL = "https://ixkganrxtkywypvqkqkn.supabase.co"
     // Public anonymous key (read-only for published content + public submission insertion)
-    const val DEFAULT_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml4a2dhbnJ4dGt5d3lwdnFrcWtuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MDQwNjcyMDAsImV4cCI6MjAyNTY0MzIwMH0.placeholder"
+    const val DEFAULT_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml4a2dhbnJ4dGt5d3lwdnFrcWtuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY3MjM3OTYsImV4cCI6MjEwMjI5OTc5Nn0.SPHzwpfZpCpo6vrbKZ5wjiPlQE9e7UTMEbPcZGZ7gRQ"
 
     @Volatile
     var currentMode: DataSourceMode = DataSourceMode.SUPABASE

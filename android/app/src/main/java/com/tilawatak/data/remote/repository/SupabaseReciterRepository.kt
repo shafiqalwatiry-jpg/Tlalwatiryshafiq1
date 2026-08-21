@@ -48,8 +48,21 @@ class SupabaseReciterRepository(
             "order" to "created_at.desc"
         ).apply { putAll(params) }
 
-        val response = SupabaseHttpClient.get(SupabaseContracts.VIEW_PUBLIC_RECITERS, queryParams)
-        return response.mapCatching { jsonStr ->
+        val response = SupabaseHttpClient.get(SupabaseContracts.VIEW_RECITER_STATS, queryParams)
+        if (response.isSuccess) {
+            return response.mapCatching { jsonStr ->
+                val jsonArray = JSONArray(jsonStr)
+                val list = mutableListOf<Reciter>()
+                for (i in 0 until jsonArray.length()) {
+                    val obj = jsonArray.getJSONObject(i)
+                    list.add(SupabaseDtoMappers.mapJsonToReciter(obj))
+                }
+                list
+            }
+        }
+
+        val fallbackResponse = SupabaseHttpClient.get(SupabaseContracts.VIEW_PUBLIC_RECITERS, queryParams)
+        return fallbackResponse.mapCatching { jsonStr ->
             val jsonArray = JSONArray(jsonStr)
             val list = mutableListOf<Reciter>()
             for (i in 0 until jsonArray.length()) {
@@ -66,8 +79,9 @@ class SupabaseReciterRepository(
             "id" to "eq.$id",
             "limit" to "1"
         )
-        val response = SupabaseHttpClient.get(SupabaseContracts.VIEW_PUBLIC_RECITERS, queryParams)
-        return response.mapCatching { jsonStr ->
+        val response = SupabaseHttpClient.get(SupabaseContracts.VIEW_RECITER_STATS, queryParams)
+        val respToUse = if (response.isSuccess) response else SupabaseHttpClient.get(SupabaseContracts.VIEW_PUBLIC_RECITERS, queryParams)
+        return respToUse.mapCatching { jsonStr ->
             val jsonArray = JSONArray(jsonStr)
             if (jsonArray.length() > 0) {
                 SupabaseDtoMappers.mapJsonToReciter(jsonArray.getJSONObject(0))
@@ -83,8 +97,9 @@ class SupabaseReciterRepository(
             "or" to "(is_staff_pick.eq.true,is_verified.eq.true)",
             "limit" to "10"
         )
-        val response = SupabaseHttpClient.get(SupabaseContracts.VIEW_PUBLIC_RECITERS, queryParams)
-        return response.mapCatching { jsonStr ->
+        val response = SupabaseHttpClient.get(SupabaseContracts.VIEW_RECITER_STATS, queryParams)
+        val respToUse = if (response.isSuccess) response else SupabaseHttpClient.get(SupabaseContracts.VIEW_PUBLIC_RECITERS, queryParams)
+        return respToUse.mapCatching { jsonStr ->
             val jsonArray = JSONArray(jsonStr)
             val list = mutableListOf<Reciter>()
             for (i in 0 until jsonArray.length()) {

@@ -21,9 +21,12 @@ data class SubmissionFormState(
     val surahNumber: Int = 1,
     val surahName: String = "الفاتحة",
     val ayahRange: String = "كاملة (1-7)",
+    val ayahStart: Int = 1,
+    val ayahEnd: Int = 7,
     val riwayah: String = "حفص عن عاصم",
     val description: String = "",
     val audioFileName: String? = null,
+    val audioBytes: ByteArray? = null,
     val audioDurationSeconds: Long = 120,
     val validationError: String? = null
 )
@@ -90,8 +93,8 @@ class SubmissionViewModel(
         _uiState.update { it.copy(formState = it.formState.copy(surahNumber = number, surahName = name)) }
     }
 
-    fun updateAyahRange(range: String) {
-        _uiState.update { it.copy(formState = it.formState.copy(ayahRange = range)) }
+    fun updateAyahRange(range: String, start: Int = 1, end: Int = 1) {
+        _uiState.update { it.copy(formState = it.formState.copy(ayahRange = range, ayahStart = start, ayahEnd = end)) }
     }
 
     fun updateRiwayah(riwayah: String) {
@@ -102,11 +105,12 @@ class SubmissionViewModel(
         _uiState.update { it.copy(formState = it.formState.copy(description = desc)) }
     }
 
-    fun selectAudioFile(fileName: String, durationSeconds: Long) {
+    fun selectAudioFile(fileName: String, durationSeconds: Long, bytes: ByteArray? = null) {
         _uiState.update {
             it.copy(
                 formState = it.formState.copy(
                     audioFileName = fileName,
+                    audioBytes = bytes,
                     audioDurationSeconds = durationSeconds,
                     validationError = null
                 )
@@ -128,13 +132,22 @@ class SubmissionViewModel(
             return
         }
 
-        if (form.audioFileName == null) {
+        if (form.audioFileName == null && form.audioBytes == null) {
             _uiState.update { it.copy(formState = it.formState.copy(validationError = "يرجى اختيار ملف الصوت للتلاوة")) }
             return
         }
 
         viewModelScope.launch {
             _uiState.update { it.copy(isSubmitting = true, errorMessage = null) }
+
+            var storagePath = ""
+            if (form.audioBytes != null && form.audioFileName != null && submissionRepository is com.tilawatak.data.remote.repository.SupabaseSubmissionRepository) {
+                val uploadRes = submissionRepository.uploadSubmissionAudio(form.audioFileName, form.audioBytes)
+                if (uploadRes.isSuccess) {
+                    storagePath = uploadRes.getOrNull() ?: ""
+                }
+            }
+
             val submission = RecitationSubmission(
                 id = "",
                 displayName = form.displayName,
@@ -145,9 +158,12 @@ class SubmissionViewModel(
                 surahNumber = form.surahNumber,
                 surahName = form.surahName,
                 ayahRange = form.ayahRange,
+                ayahStart = form.ayahStart,
+                ayahEnd = form.ayahEnd,
                 riwayah = form.riwayah,
                 description = form.description,
-                audioUri = "mock://audio/${form.audioFileName}",
+                audioUri = form.audioFileName ?: "",
+                audioStoragePath = storagePath,
                 audioDurationSeconds = form.audioDurationSeconds,
                 status = SubmissionStatus.PENDING
             )

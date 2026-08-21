@@ -24,6 +24,7 @@ object SupabaseContracts {
     const val RPC_TOGGLE_LIKE = "toggle_recitation_like"
     const val RPC_RECORD_LISTEN = "record_listen_event"
     const val RPC_SEARCH_RECITERS = "search_public_reciters"
+    const val RPC_SUBMIT_RECITATION = "submit_recitation_public"
 
     const val BUCKET_PROFILE_IMAGES = "profile-images"
     const val BUCKET_RECITATION_AUDIO = "recitation-audio"

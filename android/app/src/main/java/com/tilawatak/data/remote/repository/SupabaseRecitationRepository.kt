@@ -51,8 +51,9 @@ class SupabaseRecitationRepository(
             "order" to "published_at.desc"
         ).apply { putAll(params) }
 
-        val response = SupabaseHttpClient.get(SupabaseContracts.VIEW_PUBLIC_RECITATIONS, queryParams)
-        return response.mapCatching { jsonStr ->
+        val response = SupabaseHttpClient.get(SupabaseContracts.VIEW_RECITATION_STATS, queryParams)
+        val respToUse = if (response.isSuccess) response else SupabaseHttpClient.get(SupabaseContracts.VIEW_PUBLIC_RECITATIONS, queryParams)
+        return respToUse.mapCatching { jsonStr ->
             val jsonArray = JSONArray(jsonStr)
             val list = mutableListOf<Recitation>()
             for (i in 0 until jsonArray.length()) {
@@ -75,8 +76,9 @@ class SupabaseRecitationRepository(
             "reciter_id" to "eq.$reciterId",
             "order" to "published_at.desc"
         )
-        val response = SupabaseHttpClient.get(SupabaseContracts.VIEW_PUBLIC_RECITATIONS, queryParams)
-        return response.mapCatching { jsonStr ->
+        val response = SupabaseHttpClient.get(SupabaseContracts.VIEW_RECITATION_STATS, queryParams)
+        val respToUse = if (response.isSuccess) response else SupabaseHttpClient.get(SupabaseContracts.VIEW_PUBLIC_RECITATIONS, queryParams)
+        return respToUse.mapCatching { jsonStr ->
             val jsonArray = JSONArray(jsonStr)
             val list = mutableListOf<Recitation>()
             for (i in 0 until jsonArray.length()) {
@@ -105,8 +107,8 @@ class SupabaseRecitationRepository(
             val jsonArray = JSONArray(jsonStr)
             if (jsonArray.length() > 0) {
                 val row = jsonArray.getJSONObject(0)
-                val isLiked = row.optBoolean("is_liked", false)
-                val totalLikes = row.optLong("total_likes", 0L)
+                val isLiked = row.optBoolean("liked", row.optBoolean("is_liked", false))
+                val totalLikes = row.optLong("total_likes", row.optLong("likes_count", 0L))
 
                 if (isLiked) {
                     userLikedIds.add(recitationId)

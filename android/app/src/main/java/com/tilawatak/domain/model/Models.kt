@@ -100,6 +100,7 @@ data class RecitationSubmission(
     val usePseudonym: Boolean = false,
     val gender: Gender = Gender.MALE,
     val country: String,
+    val profileImagePath: String? = null,
     val surahNumber: Int,
     val surahName: String,
     val ayahRange: String,

@@ -1,6 +1,6 @@
 {
-  "name": "Remix 222",
-  "description": "",
+  "name": "تلاوتك للعالم - Tilawatak",
+  "description": "منصة عالمية معتمدة لتلاوات كتاب الله الكريم، استمع إلى أصوات القراء وانشر تلاوتك للمراجعة والاعتماد",
   "requestFramePermissions": [
     "microphone"
   ],

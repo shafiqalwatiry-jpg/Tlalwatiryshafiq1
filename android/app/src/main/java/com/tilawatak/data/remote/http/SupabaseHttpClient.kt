@@ -75,9 +75,7 @@ object SupabaseHttpClient {
                 setRequestProperty("Authorization", "Bearer ${SupabaseConfig.supabaseAnonKey}")
                 setRequestProperty("Content-Type", "application/json")
                 setRequestProperty("Accept", "application/json")
-                if (preferReturnRepresentation) {
-                    setRequestProperty("Prefer", "return=representation")
-                }
+                setRequestProperty("Prefer", if (preferReturnRepresentation) "return=representation" else "return=minimal")
             }
 
             OutputStreamWriter(connection.outputStream).use { writer ->
@@ -87,8 +85,15 @@ object SupabaseHttpClient {
 
             val responseCode = connection.responseCode
             if (responseCode in 200..299) {
-                val response = BufferedReader(InputStreamReader(connection.inputStream)).use { it.readText() }
-                Result.success(response)
+                val response = try {
+                    val stream = connection.inputStream
+                    if (stream != null) {
+                        BufferedReader(InputStreamReader(stream)).use { it.readText() }
+                    } else "{}"
+                } catch (e: Exception) {
+                    "{}"
+                }
+                Result.success(if (response.isBlank()) "{}" else response)
             } else {
                 val errorResponse = connection.errorStream?.let {
                     BufferedReader(InputStreamReader(it)).use { r -> r.readText() }

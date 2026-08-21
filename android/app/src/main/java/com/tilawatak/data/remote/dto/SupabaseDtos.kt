@@ -89,7 +89,7 @@ object SupabaseDtoMappers {
         val reciterAvatar = SupabaseConfig.getPublicAvatarUrl(reciterAvatarRaw)
         val reciterCountry = obj.optString("reciter_country", "")
         val surahNumber = obj.optInt("surah_number", 1)
-        val surahNameArabic = obj.optString("surah_name_arabic", "")
+        val surahNameArabic = obj.optString("surah_name", obj.optString("surah_name_arabic", ""))
         val ayahRange = obj.optString("ayah_range", "كاملة")
         val ayahStart = obj.optInt("ayah_start", 1)
         val ayahEnd = obj.optInt("ayah_end", 1)
@@ -105,8 +105,8 @@ object SupabaseDtoMappers {
         val statusStr = obj.optString("status", "APPROVED")
         val status = try { SubmissionStatus.valueOf(statusStr) } catch (e: Exception) { SubmissionStatus.APPROVED }
         val publishedAt = parseIsoTimestamp(obj.optString("published_at", null))
-        val listenCount = obj.optLong("listen_count", 0L)
-        val likeCount = obj.optLong("like_count", 0L)
+        val listenCount = obj.optLong("total_listens", obj.optLong("listen_count", 0L))
+        val likeCount = obj.optLong("total_likes", obj.optLong("like_count", 0L))
         val isStaffPick = obj.optBoolean("is_staff_pick", false)
 
         return Recitation(
@@ -183,25 +183,25 @@ object SupabaseDtoMappers {
     fun mapSubmissionToJson(submission: RecitationSubmission): JSONObject {
         return JSONObject().apply {
             put("display_name", submission.displayName)
-            if (submission.pseudonym != null) {
+            if (!submission.pseudonym.isNullOrBlank()) {
                 put("pseudonym", submission.pseudonym)
             }
             put("use_pseudonym", submission.usePseudonym)
             put("gender", submission.gender.name)
             put("country", submission.country)
+            if (!submission.profileImagePath.isNullOrBlank()) {
+                put("profile_image_path", submission.profileImagePath)
+            }
             put("surah_number", submission.surahNumber)
             put("surah_name", submission.surahName)
-            put("ayah_range", submission.ayahRange)
             put("ayah_start", submission.ayahStart)
             put("ayah_end", submission.ayahEnd)
             put("riwayah", submission.riwayah)
             put("description", submission.description)
             put("audio_storage_path", submission.audioStoragePath)
-            if (submission.externalAudioUrl != null) {
+            if (!submission.externalAudioUrl.isNullOrBlank()) {
                 put("external_audio_url", submission.externalAudioUrl)
             }
-            put("audio_duration_seconds", submission.audioDurationSeconds)
-            // Database trigger enforces PENDING, but DTO explicitly sends PENDING
             put("status", "PENDING")
         }
     }
