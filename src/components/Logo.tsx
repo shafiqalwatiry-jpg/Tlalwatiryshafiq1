@@ -5,13 +5,29 @@ interface LogoProps {
   showText?: boolean;
   className?: string;
   isLight?: boolean;
+  onPointerDown?: React.PointerEventHandler<HTMLDivElement>;
+  onPointerUp?: React.PointerEventHandler<HTMLDivElement>;
+  onPointerCancel?: React.PointerEventHandler<HTMLDivElement>;
+  onTouchStart?: React.TouchEventHandler<HTMLDivElement>;
+  onTouchEnd?: React.TouchEventHandler<HTMLDivElement>;
+  onMouseDown?: React.MouseEventHandler<HTMLDivElement>;
+  onMouseUp?: React.MouseEventHandler<HTMLDivElement>;
+  onClick?: React.MouseEventHandler<HTMLDivElement>;
 }
 
 export const Logo: React.FC<LogoProps> = ({
   size = 'md',
   showText = true,
   className = '',
-  isLight = false
+  isLight = false,
+  onPointerDown,
+  onPointerUp,
+  onPointerCancel,
+  onTouchStart,
+  onTouchEnd,
+  onMouseDown,
+  onMouseUp,
+  onClick
 }) => {
   const iconSizes = {
     sm: 'w-7 h-7',
@@ -35,7 +51,17 @@ export const Logo: React.FC<LogoProps> = ({
   };
 
   return (
-    <div className={`flex items-center gap-2.5 select-none ${className}`}>
+    <div
+      className={`flex items-center gap-2.5 select-none ${className}`}
+      onPointerDown={onPointerDown}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerCancel}
+      onTouchStart={onTouchStart}
+      onTouchEnd={onTouchEnd}
+      onMouseDown={onMouseDown}
+      onMouseUp={onMouseUp}
+      onClick={onClick}
+    >
       {/* SVG Icon Emblem */}
       <div className={`relative ${iconSizes[size]} flex items-center justify-center shrink-0`}>
         <svg

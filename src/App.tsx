@@ -28,6 +28,7 @@ import { ListenScreen } from './components/ListenScreen';
 import { AboutScreen } from './components/AboutScreen';
 import { AndroidArchitectureModal } from './components/AndroidArchitectureModal';
 import { AdminControlPanel } from './components/admin/AdminControlPanel';
+import { AdminUnlockModal } from './components/admin/AdminUnlockModal';
 import { NotificationsModal } from './components/NotificationsModal';
 import { UserProfileModal } from './components/UserProfileModal';
 import { userService } from './services/UserService';
@@ -65,6 +66,14 @@ export default function App() {
   const [isAdminViewOpen, setIsAdminViewOpen] = useState<boolean>(
     typeof window !== 'undefined' && window.location.hash === '#admin'
   );
+  const [isAdminButtonVisible, setIsAdminButtonVisible] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('tilawatak_admin_ui_visible') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [isAdminUnlockModalOpen, setIsAdminUnlockModalOpen] = useState(false);
 
   // Global Player State
   const [playerState, setPlayerState] = useState<PlayerState>(audioService.getState());
@@ -209,6 +218,8 @@ export default function App() {
           setIsAdminViewOpen(true);
           window.location.hash = 'admin';
         }}
+        isAdminButtonVisible={isAdminButtonVisible}
+        onTriggerAdminUnlock={() => setIsAdminUnlockModalOpen(true)}
       />
 
       {/* Main Content Area */}
@@ -362,6 +373,25 @@ export default function App() {
       <UserProfileModal
         isOpen={isProfileModalOpen}
         onClose={() => setIsProfileModalOpen(false)}
+      />
+
+      {/* Admin UI Unlock Modal (Secret Gesture Trigger) */}
+      <AdminUnlockModal
+        isOpen={isAdminUnlockModalOpen}
+        onClose={() => setIsAdminUnlockModalOpen(false)}
+        isCurrentlyUnlocked={isAdminButtonVisible}
+        onUnlockSuccess={() => {
+          setIsAdminButtonVisible(true);
+          try {
+            localStorage.setItem('tilawatak_admin_ui_visible', 'true');
+          } catch {}
+        }}
+        onHideAdminButton={() => {
+          setIsAdminButtonVisible(false);
+          try {
+            localStorage.removeItem('tilawatak_admin_ui_visible');
+          } catch {}
+        }}
       />
 
       {/* Bottom Navigation for Mobile */}

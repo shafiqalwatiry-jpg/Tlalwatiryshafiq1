@@ -1,28 +1,35 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Logo } from './Logo';
-import { UserProfile, UserNotification } from '../types';
+import { UserProfile } from '../types';
 import { userService } from '../services/UserService';
 import {
   Bell,
   User,
-  ShieldCheck,
-  CheckCircle2,
-  Headphones
+  ShieldCheck
 } from 'lucide-react';
 
 interface HeaderProps {
   onOpenProfile: () => void;
   onOpenNotifications: () => void;
   onOpenAdmin: () => void;
+  isAdminButtonVisible: boolean;
+  onTriggerAdminUnlock: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   onOpenProfile,
   onOpenNotifications,
-  onOpenAdmin
+  onOpenAdmin,
+  isAdminButtonVisible,
+  onTriggerAdminUnlock
 }) => {
   const [profile, setProfile] = useState<UserProfile | null>(userService.getProfile());
   const [unreadCount, setUnreadCount] = useState<number>(userService.getUnreadNotificationsCount());
+
+  // Secret gesture: 2 quick taps followed by 3rd press held for 2.5 seconds
+  const tapCountRef = useRef<number>(0);
+  const tapTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     const unsubProf = userService.subscribeProfile((p) => setProfile(p));
@@ -32,14 +39,69 @@ export const Header: React.FC<HeaderProps> = ({
     return () => {
       unsubProf();
       unsubNotif();
+      if (tapTimeoutRef.current) clearTimeout(tapTimeoutRef.current);
+      if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
     };
   }, []);
+
+  const handlePointerDown = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+
+    if (tapCountRef.current === 2) {
+      // 3rd press: start 2.5 second hold timer
+      longPressTimerRef.current = setTimeout(() => {
+        onTriggerAdminUnlock();
+        tapCountRef.current = 0;
+        if (tapTimeoutRef.current) {
+          clearTimeout(tapTimeoutRef.current);
+          tapTimeoutRef.current = null;
+        }
+      }, 2500);
+    }
+  };
+
+  const handlePointerUp = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+
+    if (tapCountRef.current < 2) {
+      tapCountRef.current += 1;
+      if (tapTimeoutRef.current) clearTimeout(tapTimeoutRef.current);
+      tapTimeoutRef.current = setTimeout(() => {
+        tapCountRef.current = 0;
+      }, 600);
+    } else {
+      tapCountRef.current = 0;
+      if (tapTimeoutRef.current) clearTimeout(tapTimeoutRef.current);
+    }
+  };
+
+  const handlePointerCancel = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    tapCountRef.current = 0;
+    if (tapTimeoutRef.current) clearTimeout(tapTimeoutRef.current);
+  };
 
   return (
     <header className="sticky top-0 z-30 bg-[#F6FBFF]/95 backdrop-blur-md border-b border-[#D8E8F2] shadow-2xs">
       <div className="max-w-6xl mx-auto px-4 py-2.5 flex items-center justify-between">
-        {/* Brand & Logo */}
-        <Logo size="md" />
+        {/* Brand & Logo with gesture trigger */}
+        <div
+          className="cursor-pointer select-none"
+          onPointerDown={handlePointerDown}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerCancel}
+        >
+          <Logo size="md" />
+        </div>
 
         {/* Action Controls */}
         <div className="flex items-center gap-2 sm:gap-2.5">
@@ -80,17 +142,20 @@ export const Header: React.FC<HeaderProps> = ({
             </span>
           </button>
 
-          {/* Admin Control Switch */}
-          <button
-            onClick={onOpenAdmin}
-            className="px-3 py-1.5 rounded-xl bg-[#145273]/10 hover:bg-[#145273]/15 border border-[#145273]/20 text-[#145273] transition flex items-center gap-1.5 text-xs font-bold"
-            title="لوحة تحكم إدارة المنصة"
-          >
-            <ShieldCheck className="w-4 h-4 text-[#1687C7]" />
-            <span className="hidden sm:inline">الإدارة</span>
-          </button>
+          {/* Admin Control Switch - Strictly conditional */}
+          {isAdminButtonVisible && (
+            <button
+              onClick={onOpenAdmin}
+              className="px-3 py-1.5 rounded-xl bg-[#145273]/10 hover:bg-[#145273]/15 border border-[#145273]/20 text-[#145273] transition flex items-center gap-1.5 text-xs font-bold animate-fadeIn"
+              title="لوحة تحكم إدارة المنصة"
+            >
+              <ShieldCheck className="w-4 h-4 text-[#1687C7]" />
+              <span className="hidden sm:inline">الإدارة</span>
+            </button>
+          )}
         </div>
       </div>
     </header>
   );
 };
+
