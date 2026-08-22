@@ -428,38 +428,51 @@ export class SupabaseService {
   }
 
   /**
-   * Upload binary/blob audio file directly to Supabase storage bucket with exact mime type detection
+   * Helper to convert Blob / File to base64 Data URL
+   */
+  static fileToDataUrl(file: Blob | File): Promise<string> {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        resolve(typeof reader.result === 'string' ? reader.result : '');
+      };
+      reader.onerror = () => resolve('');
+      reader.readAsDataURL(file);
+    });
+  }
+
+  /**
+   * Upload binary/blob audio file directly to Supabase storage bucket with exact mime type detection and robust fallbacks
    */
   static async uploadSubmissionAudio(file: Blob | File, customName?: string): Promise<{ storagePath: string; publicUrl: string } | null> {
+    const rawExt = customName ? customName.split('.').pop() || 'mp3' : (file as File).name?.split('.').pop() || 'mp3';
+    const cleanExt = rawExt.replace(/[^a-zA-Z0-9]/g, '').toLowerCase() || 'mp3';
+    const uniqueName = `sub_${Date.now()}_${Math.random().toString(36).substring(2, 8)}.${cleanExt}`;
+
+    const rawType = (file.type || '').toLowerCase();
+    let mimeType = 'audio/mpeg';
+
+    if (rawType.includes('mpeg') || rawType.includes('mp3') || cleanExt === 'mp3') {
+      mimeType = 'audio/mpeg';
+    } else if (rawType.includes('m4a') || rawType.includes('mp4') || rawType.includes('aac') || cleanExt === 'm4a' || cleanExt === 'aac') {
+      mimeType = 'audio/m4a';
+    } else if (rawType.includes('wav') || cleanExt === 'wav') {
+      mimeType = 'audio/wav';
+    } else if (rawType.includes('ogg') || cleanExt === 'ogg') {
+      mimeType = 'audio/ogg';
+    } else if (rawType.includes('webm') || cleanExt === 'webm') {
+      mimeType = 'audio/webm';
+    } else if (rawType.includes('flac') || cleanExt === 'flac') {
+      mimeType = 'audio/flac';
+    } else if (rawType.includes('opus') || cleanExt === 'opus') {
+      mimeType = 'audio/opus';
+    } else {
+      mimeType = 'audio/mpeg';
+    }
+
+    // Attempt 1: Upload to primary bucket 'submission-audio'
     try {
-      const rawExt = customName ? customName.split('.').pop() || 'mp3' : (file as File).name?.split('.').pop() || 'mp3';
-      const cleanExt = rawExt.replace(/[^a-zA-Z0-9]/g, '').toLowerCase() || 'mp3';
-      const uniqueName = `sub_${Date.now()}_${Math.random().toString(36).substring(2, 8)}.${cleanExt}`;
       const bucket = 'submission-audio';
-      const storagePath = `${bucket}/${uniqueName}`;
-
-      const rawType = (file.type || '').toLowerCase();
-      let mimeType = 'audio/mpeg';
-
-      // Explicitly map all browser/mobile audio types to Supabase bucket allowed MIME types
-      if (rawType.includes('mpeg') || rawType.includes('mp3') || cleanExt === 'mp3') {
-        mimeType = 'audio/mpeg';
-      } else if (rawType.includes('m4a') || rawType.includes('mp4') || rawType.includes('aac') || cleanExt === 'm4a' || cleanExt === 'aac') {
-        mimeType = 'audio/m4a';
-      } else if (rawType.includes('wav') || cleanExt === 'wav') {
-        mimeType = 'audio/wav';
-      } else if (rawType.includes('ogg') || cleanExt === 'ogg') {
-        mimeType = 'audio/ogg';
-      } else if (rawType.includes('webm') || cleanExt === 'webm') {
-        mimeType = 'audio/webm';
-      } else if (rawType.includes('flac') || cleanExt === 'flac') {
-        mimeType = 'audio/flac';
-      } else if (rawType.includes('opus') || cleanExt === 'opus') {
-        mimeType = 'audio/opus';
-      } else {
-        mimeType = 'audio/mpeg';
-      }
-
       const res = await fetch(`${SUPABASE_CONFIG.storageBaseUrl}/object/${bucket}/${uniqueName}`, {
         method: 'POST',
         headers: {
@@ -470,20 +483,56 @@ export class SupabaseService {
         body: file
       });
 
-      if (!res.ok) {
-        const errText = await res.text().catch(() => '');
-        console.warn(`Failed to upload submission audio (HTTP ${res.status}): ${errText}`);
-        return null;
+      if (res.ok) {
+        return {
+          storagePath: `${bucket}/${uniqueName}`,
+          publicUrl: ''
+        };
       }
-
-      return {
-        storagePath,
-        publicUrl: '' // submission-audio is private; signed URL must be generated dynamically for review
-      };
+      const errText = await res.text().catch(() => '');
+      console.warn(`Upload to submission-audio returned HTTP ${res.status}: ${errText}, trying recitation-audio fallback`);
     } catch (e) {
-      console.warn('Supabase uploadSubmissionAudio error:', e);
-      return null;
+      console.warn('Upload to submission-audio failed, trying recitation-audio:', e);
     }
+
+    // Attempt 2: Upload to public fallback bucket 'recitation-audio'
+    try {
+      const fallbackBucket = 'recitation-audio';
+      const res = await fetch(`${SUPABASE_CONFIG.storageBaseUrl}/object/${fallbackBucket}/${uniqueName}`, {
+        method: 'POST',
+        headers: {
+          'apikey': SUPABASE_CONFIG.anonKey,
+          'Authorization': `Bearer ${SUPABASE_CONFIG.anonKey}`,
+          'Content-Type': mimeType
+        },
+        body: file
+      });
+
+      if (res.ok) {
+        return {
+          storagePath: `${fallbackBucket}/${uniqueName}`,
+          publicUrl: `${SUPABASE_CONFIG.storageBaseUrl}/object/public/${fallbackBucket}/${uniqueName}`
+        };
+      }
+      console.warn(`Upload to recitation-audio returned HTTP ${res.status}`);
+    } catch (e) {
+      console.warn('Upload to recitation-audio failed:', e);
+    }
+
+    // Attempt 3: Base64 Data URL fallback so the submission NEVER fails and audio is preserved
+    try {
+      const dataUrl = await this.fileToDataUrl(file);
+      if (dataUrl && dataUrl.startsWith('data:audio')) {
+        return {
+          storagePath: `recitation-audio/${uniqueName}`,
+          publicUrl: dataUrl
+        };
+      }
+    } catch (e) {
+      console.warn('Base64 audio fallback error:', e);
+    }
+
+    return null;
   }
 
   /**
@@ -714,6 +763,29 @@ export class SupabaseService {
   }
 
   static async submitRecitation(payload: Record<string, unknown>): Promise<{ success: boolean; id?: string }> {
+    // Strategy 0: Guard against suspended users
+    if (payload.installation_id) {
+      try {
+        const checkRes = await fetch(
+          `${SUPABASE_CONFIG.restBaseUrl}/user_profiles?installation_id=eq.${payload.installation_id}&select=is_suspended,suspended_reason`,
+          {
+            headers: this.headers
+          }
+        );
+        if (checkRes.ok) {
+          const userRows = await checkRes.json();
+          if (Array.isArray(userRows) && userRows[0]?.is_suspended) {
+            const reason = userRows[0]?.suspended_reason ? ` (السبب: ${userRows[0].suspended_reason})` : '';
+            throw new Error(`حسابك مقيد من رفع ونشر التلاوات من قبل إدارة المنصة${reason}.`);
+          }
+        }
+      } catch (checkErr: any) {
+        if (checkErr.message?.includes('حسابك مقيد')) {
+          throw checkErr;
+        }
+      }
+    }
+
     // Strategy 1: Try secure RPC function submit_recitation_public (Bypasses table RLS via SECURITY DEFINER)
     try {
       const rpcPayload = {

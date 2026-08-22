@@ -5,6 +5,7 @@
 
 import { UserProfile, UserNotification } from '../types';
 import { SUPABASE_CONFIG } from './SupabaseService';
+import { triggerSystemNotification } from '../utils/notificationUtils';
 
 const INSTALLATION_KEY = 'tilawatak_installation_id';
 const USER_PROFILE_KEY = 'tilawatak_user_profile_v1';
@@ -138,7 +139,9 @@ export class UserService {
             bio: r.bio || '',
             email: r.email,
             whatsapp: r.whatsapp,
-            isProfileCompleted: !!r.is_profile_completed,
+            isProfileCompleted: !!r.is_profile_completed || (r.display_name && r.display_name !== 'زائر المنصة'),
+            isSuspended: !!r.is_suspended,
+            suspendedReason: r.suspended_reason || undefined,
             lastActiveAt: r.last_active_at,
             createdAt: r.created_at
           };
@@ -275,7 +278,21 @@ export class UserService {
             createdAt: r.created_at
           }));
 
-          // Merge with existing local
+          // Merge with existing local and check for new unread to trigger system notifications
+          const existingIds = new Set(this.notifications.map((n) => n.id));
+          const existingRefs = new Set(this.notifications.map((n) => n.referenceId).filter(Boolean));
+
+          mapped.forEach((notif) => {
+            if (!notif.isRead && !existingIds.has(notif.id) && (!notif.referenceId || !existingRefs.has(notif.referenceId))) {
+              triggerSystemNotification({
+                id: notif.id,
+                title: notif.title,
+                body: notif.body,
+                tag: notif.referenceId
+              });
+            }
+          });
+
           const localOnly = this.notifications.filter(
             (n) => !mapped.some((m) => m.id === n.id || (m.referenceId && m.referenceId === n.referenceId))
           );
@@ -302,6 +319,14 @@ export class UserService {
     this.notifications.unshift(newNotif);
     localStorage.setItem(USER_NOTIFICATIONS_KEY, JSON.stringify(this.notifications));
     this.notifyNotificationListeners();
+
+    // Trigger System Android/Web Notification
+    triggerSystemNotification({
+      id: newNotif.id,
+      title: newNotif.title,
+      body: newNotif.body,
+      tag: newNotif.referenceId
+    });
 
     // Push to Supabase if possible
     try {

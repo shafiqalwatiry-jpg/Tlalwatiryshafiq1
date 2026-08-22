@@ -66,18 +66,23 @@ export const SubmitRecitationView: React.FC<SubmitRecitationViewProps> = ({
   submissionsCount
 }) => {
   const initialDraft = getSavedDraft();
+  const userProfile = userService.getProfile();
 
   // Step state: 'instructions' | 'form' | 'success'
   const [step, setStep] = useState<'instructions' | 'form' | 'success'>(
     initialDraft.step && initialDraft.step !== 'success' ? initialDraft.step : 'instructions'
   );
 
-  // Form states initialized with persistent draft
-  const [displayName, setDisplayName] = useState(initialDraft.displayName || '');
+  // Form states initialized with persistent draft or user profile
+  const [displayName, setDisplayName] = useState(
+    initialDraft.displayName || (userProfile.displayName !== 'زائر المنصة' ? userProfile.displayName : '')
+  );
   const [usePseudonym, setUsePseudonym] = useState(initialDraft.usePseudonym || false);
   const [pseudonym, setPseudonym] = useState(initialDraft.pseudonym || '');
   const [gender, setGender] = useState<'male' | 'female'>(initialDraft.gender || 'male');
-  const [country, setCountry] = useState(initialDraft.country || 'المملكة العربية السعودية');
+  const [country, setCountry] = useState(
+    initialDraft.country || userProfile.country || 'المملكة العربية السعودية'
+  );
   const [surahNumber, setSurahNumber] = useState(initialDraft.surahNumber || 1);
   const [ayahRange, setAyahRange] = useState(initialDraft.ayahRange || '١ - ٧ (كاملة)');
   const [riwayah, setRiwayah] = useState(initialDraft.riwayah || 'حفص عن عاصم');
@@ -93,6 +98,23 @@ export const SubmitRecitationView: React.FC<SubmitRecitationViewProps> = ({
   const [uploadStatusText, setUploadStatusText] = useState('');
   const [lastSubmittedId, setLastSubmittedId] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
+  const [currentSuspension, setCurrentSuspension] = useState<{ isSuspended?: boolean; reason?: string }>({
+    isSuspended: userProfile.isSuspended,
+    reason: userProfile.suspendedReason
+  });
+
+  // Listen to profile updates (e.g. if suspended by admin or updated)
+  useEffect(() => {
+    const unsub = userService.subscribeProfile((p) => {
+      if (p) {
+        setCurrentSuspension({
+          isSuspended: p.isSuspended,
+          reason: p.suspendedReason
+        });
+      }
+    });
+    return unsub;
+  }, []);
 
   // Persist draft to sessionStorage
   useEffect(() => {
@@ -385,7 +407,33 @@ export const SubmitRecitationView: React.FC<SubmitRecitationViewProps> = ({
         )}
       </div>
 
-      {/* PHASE 1: Instructional Page */}
+      {/* SUSPENSION BLOCK */}
+      {currentSuspension.isSuspended ? (
+        <div className="bg-rose-50 border border-rose-200 rounded-3xl p-6 sm:p-8 text-center space-y-4 font-tajawal shadow-sm">
+          <div className="w-14 h-14 bg-rose-100 text-rose-600 rounded-2xl flex items-center justify-center mx-auto">
+            <AlertCircle className="w-8 h-8" />
+          </div>
+          <h3 className="text-xl font-bold font-amiri text-rose-900">حسابك مقيد من رفع التلاوات</h3>
+          <p className="text-xs sm:text-sm text-rose-700 max-w-md mx-auto leading-relaxed">
+            نعتذر منك، تم تقييد إمكانية رفع ونشر التلاوات لهذا الحساب من قبل إدارة المنصة.
+            {currentSuspension.reason ? ` (سبب التقييد: ${currentSuspension.reason})` : ''}
+            <br />
+            يمكنك الاستمرار في الاستماع والتصفح، أو مراجعة إدارة المنصة لرفع القيد.
+          </p>
+          {submissionsCount > 0 && (
+            <div className="pt-2">
+              <button
+                onClick={onViewSubmissions}
+                className="px-5 py-2.5 rounded-xl bg-white border border-rose-300 text-rose-800 text-xs font-semibold hover:bg-rose-50 transition-colors shadow-xs"
+              >
+                عرض طلباتي السابقة ({submissionsCount})
+              </button>
+            </div>
+          )}
+        </div>
+      ) : (
+        <>
+          {/* PHASE 1: Instructional Page */}
       {step === 'instructions' && (
         <div className="bg-white rounded-3xl p-6 sm:p-8 border border-[#E2E5DF] shadow-sm space-y-6">
           {/* Main Slogan Banner */}
@@ -857,10 +905,26 @@ export const SubmitRecitationView: React.FC<SubmitRecitationViewProps> = ({
             <button
               onClick={() => {
                 setStep('form');
+                // Reset recitation-specific fields only, retaining personal name & country
+                setAudioFile(null);
                 setAudioFileName('');
-                setDisplayName('');
-                setPseudonym('');
+                setAudioFileSizeFormatted('');
+                setAudioDuration(180);
+                setExternalAudioUrl('');
+                setExternalImageUrl('');
+                setDescription('');
+                setAyahRange('١ - ٧ (كاملة)');
                 setAgreeToTerms(false);
+                setErrorMessage('');
+                if (previewAudioRef.current) {
+                  previewAudioRef.current.pause();
+                  previewAudioRef.current.src = '';
+                }
+                if (previewAudioUrl) {
+                  URL.revokeObjectURL(previewAudioUrl);
+                  setPreviewAudioUrl(null);
+                }
+                setIsPlayingPreview(false);
               }}
               className="px-6 py-2.5 rounded-xl border border-[#E2E5DF] text-[#102A20] text-xs font-semibold hover:bg-[#FAFBF9]"
             >
@@ -868,6 +932,8 @@ export const SubmitRecitationView: React.FC<SubmitRecitationViewProps> = ({
             </button>
           </div>
         </div>
+      )}
+        </>
       )}
     </div>
   );

@@ -1,6 +1,7 @@
 import { Recitation, PlayerState } from '../types';
 import { offlineAudioService } from './OfflineAudioService';
 import { SupabaseService } from './SupabaseService';
+import { recitationRepository } from './Repositories';
 
 export type PlayerEventListener = (state: PlayerState) => void;
 
@@ -27,6 +28,10 @@ export class AudioService {
     queue: [],
     queueIndex: -1
   };
+
+  // Prevent duplicate listen counts for the same playback session
+  private hasRecordedListenForTrack: boolean = false;
+  private currentTrackId: string | null = null;
 
   private constructor() {
     if (typeof window !== 'undefined') {
@@ -62,6 +67,24 @@ export class AudioService {
         if (this.audio.duration && !isNaN(this.audio.duration)) {
           this.state.duration = this.audio.duration;
         }
+
+        // Record a single listen event when played for >= 5 seconds
+        if (
+          !this.hasRecordedListenForTrack &&
+          this.state.currentRecitation &&
+          this.audio.currentTime >= 5
+        ) {
+          this.hasRecordedListenForTrack = true;
+          const currentRec = this.state.currentRecitation;
+          recitationRepository
+            .recordListenEvent({
+              recitationId: currentRec.id,
+              durationSeconds: Math.floor(this.audio.currentTime),
+              completed: false
+            })
+            .catch(() => {});
+        }
+
         const now = Date.now();
         if (now - lastUpdateTime > 250) {
           lastUpdateTime = now;
@@ -78,6 +101,17 @@ export class AudioService {
     });
 
     this.audio.addEventListener('ended', () => {
+      if (this.state.currentRecitation && !this.hasRecordedListenForTrack) {
+        this.hasRecordedListenForTrack = true;
+        const currentRec = this.state.currentRecitation;
+        recitationRepository
+          .recordListenEvent({
+            recitationId: currentRec.id,
+            durationSeconds: Math.floor(this.audio?.duration || this.audio?.currentTime || 5),
+            completed: true
+          })
+          .catch(() => {});
+      }
       this.playNext();
     });
 
@@ -140,6 +174,8 @@ export class AudioService {
     this.state.currentRecitation = recitation;
     this.state.duration = recitation.duration;
     this.state.currentTime = 0;
+    this.hasRecordedListenForTrack = false;
+    this.currentTrackId = recitation.id;
 
     // Resolve offline playable audio URL or streaming URL
     let playableSource = await offlineAudioService.getPlayableAudioUrl(recitation.id, recitation.audioUrl);

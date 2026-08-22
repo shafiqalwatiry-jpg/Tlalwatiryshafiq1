@@ -113,13 +113,25 @@ export function isValidAudioUrl(url?: string | null): boolean {
   const isStorageAudio = trimmed.includes('/storage/v1/object/') &&
     (trimmed.includes('audio') || trimmed.includes('.mp3') || trimmed.includes('.m4a') || trimmed.includes('.wav') || trimmed.includes('.ogg') || trimmed.includes('.aac') || trimmed.includes('.flac') || trimmed.includes('.webm') || trimmed.includes('.opus') || trimmed.includes('token='));
 
+  // Known Quran & Audio CDNs and streaming hosts
+  const isKnownAudioHost =
+    lower.includes('mp3quran.net') ||
+    lower.includes('quranicaudio.com') ||
+    lower.includes('everyayah.com') ||
+    lower.includes('archive.org') ||
+    lower.includes('audio.qurancdn.com') ||
+    lower.includes('verses.quran.com') ||
+    lower.includes('islamway.net') ||
+    lower.includes('surah.my');
+
   // Standard audio extensions (with optional query parameters)
-  const hasAudioExtension = /\.(mp3|m4a|wav|ogg|aac|webm|flac|opus|weba)(\?.*)?$/i.test(trimmed);
+  const hasAudioExtension = /\.(mp3|m4a|wav|ogg|aac|webm|flac|opus|weba)(\?.*)?$/i.test(trimmed) ||
+    /(\.mp3|\.wav|\.m4a|\.ogg|\.aac|\.webm|\.flac|\.opus)(\?|$)/i.test(lower);
 
   // Blob or Base64 audio
   const isBlobOrData = trimmed.startsWith('blob:') || trimmed.startsWith('data:audio');
 
-  return hasAudioExtension || isStorageAudio || isBlobOrData;
+  return hasAudioExtension || isStorageAudio || isBlobOrData || (isKnownAudioHost && !lower.endsWith('.html') && !lower.endsWith('.php'));
 }
 
 /**

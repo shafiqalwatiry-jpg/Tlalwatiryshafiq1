@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { adminService } from '../../services/AdminService';
 import { SupabaseService } from '../../services/SupabaseService';
+import { SURAH_LIST, RIWAYAT_OPTIONS } from '../../data/quranSurahs';
 import {
   Music,
   PlusCircle,
@@ -19,7 +20,8 @@ import {
   EyeOff,
   Star,
   CheckCircle,
-  Upload
+  Upload,
+  FileAudio
 } from 'lucide-react';
 
 export function AdminRecitationsView() {
@@ -50,10 +52,56 @@ export function AdminRecitationsView() {
 
   const [isSaving, setIsSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [isUploadingAudio, setIsUploadingAudio] = useState(false);
+  const [uploadAudioMessage, setUploadAudioMessage] = useState('');
 
   // Audio Preview
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [audioElem, setAudioElem] = useState<HTMLAudioElement | null>(null);
+
+  const handleAudioFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploadingAudio(true);
+    setUploadAudioMessage('جاري رفع الملف الصوتي...');
+    setFormError(null);
+
+    try {
+      const ext = file.name.split('.').pop() || 'mp3';
+      const cleanExt = ext.replace(/[^a-zA-Z0-9]/g, '').toLowerCase() || 'mp3';
+      const fileName = `rec_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.${cleanExt}`;
+      const publicUrl = await adminService.uploadFile('recitation-audio', fileName, file);
+      setAudioStoragePath(fileName);
+      setExternalAudioUrl(publicUrl);
+
+      // Detect duration
+      try {
+        const tempAudio = new Audio(URL.createObjectURL(file));
+        tempAudio.onloadedmetadata = () => {
+          if (tempAudio.duration && !isNaN(tempAudio.duration)) {
+            setDurationSeconds(Math.round(tempAudio.duration));
+          }
+        };
+      } catch {}
+
+      setUploadAudioMessage(`تم رفع الملف بنجاح (${file.name})`);
+    } catch (err: any) {
+      setFormError(err?.message || 'فشل رفع الملف الصوتي');
+    } finally {
+      setIsUploadingAudio(false);
+    }
+  };
+
+  const handleSurahSelect = (num: number) => {
+    setSurahNumber(num);
+    const surahObj = SURAH_LIST.find((s) => s.number === num);
+    if (surahObj) {
+      setSurahName(surahObj.nameArabic);
+      setAyahStart(1);
+      setAyahEnd(surahObj.ayahsCount);
+    }
+  };
 
   const loadData = async () => {
     setIsLoading(true);
@@ -528,30 +576,20 @@ export function AdminRecitationsView() {
                 </select>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="block font-semibold text-[#A8C2B3]">اسم السورة *</label>
-                  <input
-                    type="text"
-                    required
-                    value={surahName}
-                    onChange={(e) => setSurahName(e.target.value)}
-                    placeholder="الفاتحة"
-                    className="w-full bg-[#0D1813] border border-[#264436] rounded-xl px-3 py-2 text-white focus:outline-none"
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <label className="block font-semibold text-[#A8C2B3]">رقم السورة (1-114)</label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={114}
-                    value={surahNumber}
-                    onChange={(e) => setSurahNumber(parseInt(e.target.value, 10) || 1)}
-                    className="w-full bg-[#0D1813] border border-[#264436] rounded-xl px-3 py-2 text-white focus:outline-none"
-                  />
-                </div>
+              <div className="space-y-1">
+                <label className="block font-semibold text-[#A8C2B3]">السورة القرآنية (114 سورة) *</label>
+                <select
+                  required
+                  value={surahNumber}
+                  onChange={(e) => handleSurahSelect(parseInt(e.target.value, 10))}
+                  className="w-full bg-[#0D1813] border border-[#264436] rounded-xl px-3 py-2 text-white focus:outline-none"
+                >
+                  {SURAH_LIST.map((s) => (
+                    <option key={s.number} value={s.number}>
+                      {s.number}. سورة {s.nameArabic} ({s.revelationType} - {s.ayahsCount} آية)
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div className="grid grid-cols-3 gap-3">
@@ -579,18 +617,51 @@ export function AdminRecitationsView() {
 
                 <div className="space-y-1">
                   <label className="block font-semibold text-[#A8C2B3]">الرواية</label>
-                  <input
-                    type="text"
+                  <select
                     value={riwayah}
                     onChange={(e) => setRiwayah(e.target.value)}
-                    placeholder="حفص عن عاصم"
                     className="w-full bg-[#0D1813] border border-[#264436] rounded-xl px-3 py-2 text-white focus:outline-none"
-                  />
+                  >
+                    {RIWAYAT_OPTIONS.map((r) => (
+                      <option key={r} value={r}>
+                        {r}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Audio Upload from Phone / Desktop */}
+              <div className="p-3 bg-[#0D1813] border border-[#264436] rounded-xl space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-[#A8C2B3] flex items-center gap-1.5">
+                    <FileAudio className="w-4 h-4 text-[#60A5FA]" />
+                    <span>ملف الصوت (رفع مباشر من الهاتف/الجهاز)</span>
+                  </span>
+                  {uploadAudioMessage && (
+                    <span className="text-[11px] text-emerald-400 font-bold">{uploadAudioMessage}</span>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <label className="px-3 py-2 bg-[#2B5742] hover:bg-[#346950] text-white rounded-xl text-xs font-semibold cursor-pointer flex items-center gap-1.5 transition">
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>{isUploadingAudio ? 'جاري الرفع...' : 'اختر ملف صوتي من الجهاز'}</span>
+                    <input
+                      type="file"
+                      accept="audio/*,.mp3,.wav,.m4a,.ogg,.aac"
+                      onChange={handleAudioFileUpload}
+                      disabled={isUploadingAudio}
+                      className="hidden"
+                    />
+                  </label>
+
+                  <span className="text-[11px] text-[#8BA496]">أو ضع رابطاً مباشراً بالأسفل</span>
                 </div>
               </div>
 
               <div className="space-y-1">
-                <label className="block font-semibold text-[#A8C2B3]">رابط الصوت المباشر أو مسار التخزين</label>
+                <label className="block font-semibold text-[#A8C2B3]">رابط الصوت المباشر أو مسار التخزين *</label>
                 <input
                   type="text"
                   required
@@ -604,7 +675,7 @@ export function AdminRecitationsView() {
                       setAudioStoragePath(val);
                     }
                   }}
-                  placeholder="https://server8.mp3quran.net/afs/001.mp3 أو recitation-audio/001.mp3"
+                  placeholder="https://server8.mp3quran.net/afs/001.mp3 أو recitation-audio/rec_123.mp3"
                   className="w-full bg-[#0D1813] border border-[#264436] rounded-xl px-3 py-2 text-white focus:outline-none"
                   dir="ltr"
                 />

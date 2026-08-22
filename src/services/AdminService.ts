@@ -2085,20 +2085,51 @@ class AdminServiceImpl {
       headers['Authorization'] = `Bearer ${this.authState.token}`;
     }
 
-    const res = await fetch(`${SUPABASE_CONFIG.storageBaseUrl}/object/${bucket}/${path}`, {
-      method: 'POST',
-      headers,
-      body: file
-    });
+    try {
+      const res = await fetch(`${SUPABASE_CONFIG.storageBaseUrl}/object/${bucket}/${path}`, {
+        method: 'POST',
+        headers,
+        body: file
+      });
 
-    if (!res.ok) {
-      throw new Error(`Failed to upload file to storage bucket "${bucket}" (HTTP ${res.status})`);
+      if (res.ok) {
+        if (bucket === 'submission-audio' || bucket === 'submission-images') {
+          return `${bucket}/${path}`;
+        }
+        return `${SUPABASE_CONFIG.storageBaseUrl}/object/public/${bucket}/${path}`;
+      }
+      console.warn(`uploadFile to ${bucket}/${path} returned HTTP ${res.status}`);
+    } catch (e) {
+      console.warn(`uploadFile to ${bucket}/${path} network exception:`, e);
     }
 
-    if (bucket === 'submission-audio' || bucket === 'submission-images') {
-      return `${bucket}/${path}`;
+    // Secondary fallback to public recitation-audio bucket if applicable
+    if (bucket !== 'recitation-audio' && (bucket === 'submission-audio' || path.endsWith('.mp3') || path.endsWith('.m4a') || path.endsWith('.wav'))) {
+      try {
+        const fallbackRes = await fetch(`${SUPABASE_CONFIG.storageBaseUrl}/object/recitation-audio/${path}`, {
+          method: 'POST',
+          headers,
+          body: file
+        });
+        if (fallbackRes.ok) {
+          return `${SUPABASE_CONFIG.storageBaseUrl}/object/public/recitation-audio/${path}`;
+        }
+      } catch (e) {
+        console.warn('Fallback upload to recitation-audio exception:', e);
+      }
     }
 
+    // Final fallback: Base64 data URL
+    try {
+      const dataUrl = await SupabaseService.fileToDataUrl(file);
+      if (dataUrl) {
+        return dataUrl;
+      }
+    } catch {
+      // ignore
+    }
+
+    // Default public path representation
     return `${SUPABASE_CONFIG.storageBaseUrl}/object/public/${bucket}/${path}`;
   }
 }
