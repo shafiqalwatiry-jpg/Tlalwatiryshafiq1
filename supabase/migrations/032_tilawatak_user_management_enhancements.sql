@@ -1,10 +1,11 @@
 -- ============================================================================
--- Migration 032: TilawatakLilAlam User Management & Suspension Enhancements
--- Description: Adds user_activity_logs table, strengthens suspension check in
--- submit_recitation_public RPC, and ensures indexes and policies for high performance.
+-- Migration 032 (Revised): TilawatakLilAlam User Management & Security Enhancements
+-- Description: Adds user_activity_logs table with strict RLS, strengthens 
+-- submit_recitation_public RPC with suspension check and audio validation without 
+-- using CASCADE or breaking existing signatures, and ensures search_path security.
 -- ============================================================================
 
--- 1. Create user_activity_logs table
+-- 1. Create user_activity_logs table if not exists
 CREATE TABLE IF NOT EXISTS public.user_activity_logs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     installation_id TEXT NOT NULL,
@@ -23,28 +24,56 @@ CREATE INDEX IF NOT EXISTS idx_user_profiles_country ON public.user_profiles(cou
 CREATE INDEX IF NOT EXISTS idx_user_profiles_last_active ON public.user_profiles(last_active_at DESC);
 CREATE INDEX IF NOT EXISTS idx_user_activity_logs_install ON public.user_activity_logs(installation_id);
 
--- 3. Enable RLS on user_activity_logs
+-- 3. Enable RLS on user_activity_logs and enforce strict admin-only read policy
 ALTER TABLE public.user_activity_logs ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "Allow public insert user activity" ON public.user_activity_logs;
 DROP POLICY IF EXISTS "Allow select user activity" ON public.user_activity_logs;
+DROP POLICY IF EXISTS "Admin only activity logs access" ON public.user_activity_logs;
 
-CREATE POLICY "Allow public insert user activity" ON public.user_activity_logs
-    FOR INSERT TO anon, authenticated WITH CHECK (true);
+-- Regular users cannot read or insert raw activity logs directly. 
+-- Only administrators or service_role can query or insert activity logs.
+CREATE POLICY "Admin only activity logs access" ON public.user_activity_logs
+    FOR ALL TO anon, authenticated
+    USING (public.is_admin())
+    WITH CHECK (public.is_admin());
 
-CREATE POLICY "Allow select user activity" ON public.user_activity_logs
-    FOR SELECT TO anon, authenticated, service_role USING (true);
+-- 4. Secure helper RPC to log user activity (SECURITY DEFINER with fixed search_path)
+CREATE OR REPLACE FUNCTION public.log_user_activity_secure(
+    p_installation_id TEXT,
+    p_event_type TEXT,
+    p_description TEXT,
+    p_admin_name TEXT DEFAULT NULL,
+    p_metadata JSONB DEFAULT NULL
+)
+RETURNS VOID AS $$
+BEGIN
+    INSERT INTO public.user_activity_logs (
+        installation_id,
+        event_type,
+        description,
+        admin_name,
+        metadata
+    ) VALUES (
+        p_installation_id,
+        p_event_type,
+        p_description,
+        COALESCE(p_admin_name, 'النظام'),
+        p_metadata
+    );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
 
--- 4. Enhance submit_recitation_public RPC with strict suspension check
-DROP FUNCTION IF EXISTS public.submit_recitation_public CASCADE;
+GRANT EXECUTE ON FUNCTION public.log_user_activity_secure TO anon, authenticated, service_role;
 
+-- 5. Enhance submit_recitation_public without using DROP FUNCTION ... CASCADE
+-- Preserves the exact signature from migration 029 while adding suspension check and audio validation.
 CREATE OR REPLACE FUNCTION public.submit_recitation_public(
     p_display_name TEXT,
     p_pseudonym TEXT DEFAULT NULL,
     p_use_pseudonym BOOLEAN DEFAULT FALSE,
     p_gender TEXT DEFAULT 'MALE',
     p_country TEXT DEFAULT 'العالم الإسلامي',
-    p_profile_image_path TEXT DEFAULT NULL,
     p_surah_number INTEGER DEFAULT 1,
     p_surah_name TEXT DEFAULT '',
     p_ayah_start INTEGER DEFAULT 1,
@@ -53,16 +82,29 @@ CREATE OR REPLACE FUNCTION public.submit_recitation_public(
     p_description TEXT DEFAULT '',
     p_audio_storage_path TEXT DEFAULT '',
     p_external_audio_url TEXT DEFAULT NULL,
+    p_profile_image_path TEXT DEFAULT NULL,
     p_installation_id TEXT DEFAULT NULL
 )
 RETURNS UUID AS $$
 DECLARE
     v_is_suspended BOOLEAN := FALSE;
     v_suspended_reason TEXT := NULL;
-    v_submission_id UUID;
+    v_new_id UUID;
+    v_clean_gender TEXT;
 BEGIN
+    -- Validate required display name
+    IF p_display_name IS NULL OR TRIM(p_display_name) = '' THEN
+        RAISE EXCEPTION 'Display name is required';
+    END IF;
+
+    -- Validate audio source existence (either Supabase Storage path or direct valid external URL)
+    IF (p_audio_storage_path IS NULL OR TRIM(p_audio_storage_path) = '') 
+       AND (p_external_audio_url IS NULL OR TRIM(p_external_audio_url) = '') THEN
+        RAISE EXCEPTION 'A valid audio storage path or external audio URL is required';
+    END IF;
+
     -- Check if user is suspended from submission
-    IF p_installation_id IS NOT NULL THEN
+    IF p_installation_id IS NOT NULL AND TRIM(p_installation_id) <> '' THEN
         SELECT is_suspended, suspended_reason 
         INTO v_is_suspended, v_suspended_reason
         FROM public.user_profiles
@@ -74,14 +116,17 @@ BEGIN
         END IF;
     END IF;
 
-    -- Insert recitation submission
+    v_clean_gender := UPPER(TRIM(COALESCE(p_gender, 'MALE')));
+    IF v_clean_gender NOT IN ('MALE', 'FEMALE') THEN
+        v_clean_gender := 'MALE';
+    END IF;
+
     INSERT INTO public.recitation_submissions (
         display_name,
         pseudonym,
         use_pseudonym,
         gender,
         country,
-        profile_image_path,
         surah_number,
         surah_name,
         ayah_start,
@@ -90,37 +135,60 @@ BEGIN
         description,
         audio_storage_path,
         external_audio_url,
+        profile_image_path,
         installation_id,
         status,
         created_at
     ) VALUES (
-        p_display_name,
-        p_pseudonym,
+        TRIM(p_display_name),
+        NULLIF(TRIM(COALESCE(p_pseudonym, '')), ''),
         p_use_pseudonym,
-        p_gender,
-        p_country,
-        p_profile_image_path,
-        p_surah_number,
-        p_surah_name,
-        p_ayah_start,
-        p_ayah_end,
-        p_riwayah,
-        p_description,
-        p_audio_storage_path,
-        p_external_audio_url,
-        p_installation_id,
+        v_clean_gender,
+        COALESCE(NULLIF(TRIM(p_country), ''), 'العالم الإسلامي'),
+        GREATEST(1, LEAST(114, COALESCE(p_surah_number, 1))),
+        COALESCE(NULLIF(TRIM(p_surah_name), ''), 'سورة الفاتحة'),
+        GREATEST(1, COALESCE(p_ayah_start, 1)),
+        GREATEST(1, COALESCE(p_ayah_end, 1)),
+        COALESCE(NULLIF(TRIM(p_riwayah), ''), 'حفص عن عاصم'),
+        COALESCE(TRIM(p_description), ''),
+        COALESCE(TRIM(p_audio_storage_path), ''),
+        NULLIF(TRIM(COALESCE(p_external_audio_url, '')), ''),
+        NULLIF(TRIM(COALESCE(p_profile_image_path, '')), ''),
+        NULLIF(TRIM(COALESCE(p_installation_id, '')), ''),
         'PENDING',
         NOW()
-    ) RETURNING id INTO v_submission_id;
+    )
+    RETURNING id INTO v_new_id;
 
-    -- Also record user activity log
-    IF p_installation_id IS NOT NULL THEN
-        INSERT INTO public.user_activity_logs (installation_id, event_type, description)
-        VALUES (p_installation_id, 'SUBMIT_RECITATION', 'إرسال تلاوة جديدة للمراجعة (سورة ' || p_surah_name || ')');
+    -- Generate admin in-app notification for incoming submission
+    INSERT INTO public.admin_notifications (
+        notification_type,
+        title,
+        content,
+        reference_id,
+        is_read,
+        created_at
+    ) VALUES (
+        'NEW_SUBMISSION',
+        'طلب تلاوة جديد: ' || COALESCE(NULLIF(TRIM(p_surah_name), ''), 'سورة قرطانية'),
+        'أرسل القارئ ' || TRIM(p_display_name) || ' طلب تلاوة جديد وهو بانتظار المراجعة والاعتماد.',
+        v_new_id::TEXT,
+        FALSE,
+        NOW()
+    );
+
+    -- Record activity log securely via helper
+    IF p_installation_id IS NOT NULL AND TRIM(p_installation_id) <> '' THEN
+        PERFORM public.log_user_activity_secure(
+            p_installation_id,
+            'SUBMIT_RECITATION',
+            'إرسال تلاوة جديدة للمراجعة (سورة ' || COALESCE(p_surah_name, '') || ')',
+            'النظام'
+        );
     END IF;
 
-    RETURN v_submission_id;
+    RETURN v_new_id;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
 
 GRANT EXECUTE ON FUNCTION public.submit_recitation_public TO anon, authenticated, service_role;
