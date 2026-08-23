@@ -58,6 +58,7 @@ export function AdminRecitationsView() {
   // Audio Preview
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [audioElem, setAudioElem] = useState<HTMLAudioElement | null>(null);
+  const uploadedFileObjectRef = React.useRef<File | null>(null);
 
   const handleAudioFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -71,9 +72,16 @@ export function AdminRecitationsView() {
       const ext = file.name.split('.').pop() || 'mp3';
       const cleanExt = ext.replace(/[^a-zA-Z0-9]/g, '').toLowerCase() || 'mp3';
       const fileName = `rec_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.${cleanExt}`;
+      const storagePath = `recitation-audio/${fileName}`;
       const publicUrl = await adminService.uploadFile('recitation-audio', fileName, file);
-      setAudioStoragePath(fileName);
-      setExternalAudioUrl(publicUrl);
+
+      if (!publicUrl) {
+        throw new Error('فشل رفع الملف الصوتي إلى خادم التخزين');
+      }
+
+      setAudioStoragePath(storagePath);
+      setExternalAudioUrl('');
+      uploadedFileObjectRef.current = file;
 
       // Detect duration
       try {
@@ -88,6 +96,7 @@ export function AdminRecitationsView() {
       setUploadAudioMessage(`تم رفع الملف بنجاح (${file.name})`);
     } catch (err: any) {
       setFormError(err?.message || 'فشل رفع الملف الصوتي');
+      setUploadAudioMessage('');
     } finally {
       setIsUploadingAudio(false);
     }
@@ -185,6 +194,7 @@ export function AdminRecitationsView() {
     setIsStaffPick(false);
     setStatus('APPROVED');
     setFormError(null);
+    uploadedFileObjectRef.current = null;
     setIsModalOpen(true);
   };
 
@@ -204,6 +214,7 @@ export function AdminRecitationsView() {
     setIsStaffPick(rec.is_staff_pick ?? false);
     setStatus(rec.status || 'APPROVED');
     setFormError(null);
+    uploadedFileObjectRef.current = null;
     setIsModalOpen(true);
   };
 
@@ -217,7 +228,7 @@ export function AdminRecitationsView() {
       setFormError('يرجى تحديد اسم السورة');
       return;
     }
-    if (!audioStoragePath.trim() && !externalAudioUrl.trim()) {
+    if (!audioStoragePath.trim() && !externalAudioUrl.trim() && !editingRecitation) {
       setFormError('يرجى إدخال مسار ملف الصوت أو الرابط المباشر');
       return;
     }
@@ -225,9 +236,31 @@ export function AdminRecitationsView() {
     setIsSaving(true);
     setFormError(null);
 
-    const isHttp = (externalAudioUrl || '').trim().startsWith('http');
-    const finalExternal = isHttp ? externalAudioUrl.trim() : (audioStoragePath.trim().startsWith('http') ? audioStoragePath.trim() : null);
-    const finalStorage = !isHttp && !audioStoragePath.trim().startsWith('http') && audioStoragePath.trim() ? audioStoragePath.trim() : null;
+    const trimmedExternal = (externalAudioUrl || '').trim();
+    const trimmedStorage = (audioStoragePath || '').trim();
+
+    let finalExternal: string | null = null;
+    let finalStorage: string | undefined = undefined;
+
+    if (trimmedExternal.startsWith('http://') || trimmedExternal.startsWith('https://')) {
+      finalExternal = trimmedExternal;
+      finalStorage = trimmedStorage && !trimmedStorage.startsWith('http')
+        ? trimmedStorage
+        : (editingRecitation?.audio_storage_path || `recitation-audio/external_${Date.now()}.mp3`);
+    } else {
+      finalExternal = null;
+      if (trimmedStorage) {
+        finalStorage = trimmedStorage.startsWith('recitation-audio/')
+          ? trimmedStorage
+          : `recitation-audio/${trimmedStorage.replace(/^\/+/, '')}`;
+      } else if (editingRecitation) {
+        finalStorage = undefined; // Retain existing storage path during edit if unchanged
+      } else {
+        setFormError('يرجى اختيار ملف صوتي أو إدخال مسار صحيح');
+        setIsSaving(false);
+        return;
+      }
+    }
 
     try {
       if (editingRecitation) {
@@ -247,6 +280,9 @@ export function AdminRecitationsView() {
           status
         });
       } else {
+        if (!finalStorage) {
+          throw new Error('مسار التخزين الصوتي مطلوب');
+        }
         await adminService.createRecitation({
           reciterId,
           surahName,
@@ -256,7 +292,7 @@ export function AdminRecitationsView() {
           riwayah,
           durationSeconds: Number(durationSeconds),
           audioStoragePath: finalStorage,
-          externalAudioUrl: finalExternal,
+          externalAudioUrl: finalExternal || undefined,
           coverImagePath: coverImagePath.trim() ? coverImagePath : undefined,
           description: description.trim() ? description : undefined,
           isStaffPick,
@@ -701,21 +737,25 @@ export function AdminRecitationsView() {
                   <button
                     type="button"
                     onClick={() => {
-                      const link = externalAudioUrl || audioStoragePath;
-                      if (!link) {
-                        alert('يرجى إدخال رابط صوتي أولاً لتجربته');
+                      let resolved = externalAudioUrl.trim();
+                      if (!resolved && audioStoragePath) {
+                        resolved = audioStoragePath.startsWith('http')
+                          ? audioStoragePath
+                          : SupabaseService.getStoragePublicUrl(audioStoragePath, 'recitation-audio');
+                      }
+                      if (!resolved && uploadedFileObjectRef.current) {
+                        resolved = URL.createObjectURL(uploadedFileObjectRef.current);
+                      }
+                      if (!resolved) {
+                        alert('يرجى اختيار ملف صوتي أو إدخال رابط أولاً لتجربته');
                         return;
                       }
-                      const resolved = SupabaseService.resolveAudioUrl({
-                        external_audio_url: externalAudioUrl,
-                        audio_storage_path: audioStoragePath
-                      }) || link;
-                      
+
                       const a = new Audio(resolved);
                       a.play().then(() => {
                         alert('جاري تشغيل ومعاينة الرابط الصوتي بنجاح!');
                       }).catch((err) => {
-                        alert(`تعذر تشغيل الرابط: ${err.message || 'يرجى التأكد من صحة الرابط'}`);
+                        alert(`تعذر تشغيل الرابط: ${err.message || 'يرجى التأكد من صحة الملف أو الرابط'}`);
                       });
                     }}
                     className="px-3 py-2 bg-[#1B382B] hover:bg-[#254C3B] text-[#D4AF37] border border-[#2B5742] rounded-xl font-bold text-xs whitespace-nowrap"
