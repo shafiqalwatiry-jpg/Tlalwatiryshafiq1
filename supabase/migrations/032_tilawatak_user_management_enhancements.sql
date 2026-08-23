@@ -1,9 +1,26 @@
 -- ============================================================================
--- Migration 032 (Revised): TilawatakLilAlam User Management & Security Enhancements
--- Description: Adds user_activity_logs table with strict RLS, strengthens 
--- submit_recitation_public RPC with suspension check and audio validation without 
--- using CASCADE or breaking existing signatures, and ensures search_path security.
+-- Migration 032 (Revised & Self-Contained): TilawatakLilAlam User Management & Security Enhancements
+-- Description: Adds user_activity_logs table with strict RLS, defensively ensures 
+-- user_profiles has all required columns (is_suspended, suspended_reason, etc.), 
+-- and strengthens submit_recitation_public RPC with suspension check and audio validation.
 -- ============================================================================
+
+-- 0. Defensively ensure user_profiles has required columns (prevents column does not exist errors)
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'user_profiles' AND column_name = 'is_suspended') THEN
+        ALTER TABLE public.user_profiles ADD COLUMN is_suspended BOOLEAN NOT NULL DEFAULT FALSE;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'user_profiles' AND column_name = 'suspended_reason') THEN
+        ALTER TABLE public.user_profiles ADD COLUMN suspended_reason TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'user_profiles' AND column_name = 'is_profile_completed') THEN
+        ALTER TABLE public.user_profiles ADD COLUMN is_profile_completed BOOLEAN NOT NULL DEFAULT FALSE;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'user_profiles' AND column_name = 'last_active_at') THEN
+        ALTER TABLE public.user_profiles ADD COLUMN last_active_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+    END IF;
+END $$;
 
 -- 1. Create user_activity_logs table if not exists
 CREATE TABLE IF NOT EXISTS public.user_activity_logs (
