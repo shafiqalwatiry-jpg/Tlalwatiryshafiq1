@@ -3,6 +3,8 @@
  * Integrates with Android WebAppInterface (`AndroidBridge`) and Web Notification API.
  */
 
+export const DEFAULT_ANDROID_CHANNEL_ID = 'tilawatak_notifications';
+
 // Cache of triggered notification keys to prevent duplicate system notifications in the same session
 const triggeredNotificationKeys = new Set<string>();
 
@@ -12,6 +14,7 @@ export interface SystemNotificationOptions {
   body: string;
   icon?: string;
   tag?: string;
+  channelId?: string;
 }
 
 /**
@@ -20,7 +23,7 @@ export interface SystemNotificationOptions {
  * 2. Falls back to Web Notifications API if supported and permitted
  */
 export function triggerSystemNotification(options: SystemNotificationOptions): boolean {
-  const { id, title, body, icon = '/icon.png', tag } = options;
+  const { id, title, body, icon = '/icon.png', tag, channelId } = options;
 
   // Deduplication key
   const dedupeKey = id || `${title}:${body}`;
@@ -29,12 +32,25 @@ export function triggerSystemNotification(options: SystemNotificationOptions): b
   }
   triggeredNotificationKeys.add(dedupeKey);
 
+  // Guarantee non-empty, non-null channelId
+  const safeChannelId = (channelId && channelId.trim().length > 0)
+    ? channelId.trim()
+    : DEFAULT_ANDROID_CHANNEL_ID;
+
   // 1. Android Native Bridge integration
   try {
     const win = window as any;
-    if (win.AndroidBridge && typeof win.AndroidBridge.showNotification === 'function') {
-      win.AndroidBridge.showNotification(title, body);
-      return true;
+    if (win.AndroidBridge) {
+      if (typeof win.AndroidBridge.showNotification === 'function') {
+        win.AndroidBridge.showNotification(title, body, safeChannelId);
+        return true;
+      } else if (typeof win.AndroidBridge.postNotification === 'function') {
+        win.AndroidBridge.postNotification(title, body, safeChannelId);
+        return true;
+      } else if (typeof win.AndroidBridge.notify === 'function') {
+        win.AndroidBridge.notify(title, body, safeChannelId);
+        return true;
+      }
     }
   } catch (err) {
     console.warn('[NotificationUtils] AndroidBridge call failed:', err);

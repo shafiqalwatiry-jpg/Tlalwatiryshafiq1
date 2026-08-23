@@ -98,6 +98,19 @@ export default function App() {
     loadData();
     userService.syncWithRemoteProfile();
     userService.fetchRemoteNotifications();
+
+    const unsubRecitations = recitationRepository.getRecitationsStream((updatedRecs) => {
+      setRecitations(updatedRecs);
+    });
+
+    const unsubReciters = reciterRepository.getRecitersStream((updatedReciters) => {
+      setReciters(updatedReciters);
+    });
+
+    return () => {
+      unsubRecitations();
+      unsubReciters();
+    };
   }, []);
 
   // Listen to AudioService state changes & MediaSession updates

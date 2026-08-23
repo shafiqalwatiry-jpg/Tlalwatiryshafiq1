@@ -64,7 +64,7 @@ export function transformGoogleDriveAudioUrl(url: string): string {
 
 /**
  * Strictly validates whether a given string is a valid playable audio URL source.
- * Rejects regular web pages, search engines, HTML documents, etc.
+ * Rejects non-audio web pages and general portals while supporting all valid direct streams and CDNs.
  */
 export function isValidAudioUrl(url?: string | null): boolean {
   if (!url || typeof url !== 'string') return false;
@@ -79,7 +79,7 @@ export function isValidAudioUrl(url?: string | null): boolean {
   }
   const lower = trimmed.toLowerCase();
 
-  // Reject non-audio web pages and general websites
+  // Reject non-audio web pages, search engines, and general portals
   if (
     lower.includes('supabase.com/dashboard') ||
     lower.includes('google.com/search') ||
@@ -103,44 +103,21 @@ export function isValidAudioUrl(url?: string | null): boolean {
     return false;
   }
 
-  // Google Drive audio links
+  // Google Drive audio links validation
   if (lower.includes('drive.google.com') || lower.includes('docs.google.com')) {
-    const hasId = /\/file\/d\/([a-zA-Z0-9_-]+)/.test(trimmed) || /[?&]id=([a-zA-Z0-9_-]+)/.test(trimmed);
-    return hasId;
+    return /\/file\/d\/([a-zA-Z0-9_-]+)/.test(trimmed) || /[?&]id=([a-zA-Z0-9_-]+)/.test(trimmed);
   }
 
-  // Storage audio path (handles public, sign, authenticated, and tokenized signed URLs)
-  const isStorageAudio = trimmed.includes('/storage/v1/object/') &&
-    (trimmed.includes('audio') || trimmed.includes('.mp3') || trimmed.includes('.m4a') || trimmed.includes('.wav') || trimmed.includes('.ogg') || trimmed.includes('.aac') || trimmed.includes('.flac') || trimmed.includes('.webm') || trimmed.includes('.opus') || trimmed.includes('token='));
-
-  // Known Quran & Audio CDNs and streaming hosts
-  const isKnownAudioHost =
-    lower.includes('mp3quran.net') ||
-    lower.includes('quranicaudio.com') ||
-    lower.includes('everyayah.com') ||
-    lower.includes('archive.org') ||
-    lower.includes('audio.qurancdn.com') ||
-    lower.includes('verses.quran.com') ||
-    lower.includes('islamway.net') ||
-    lower.includes('surah.my');
-
-  // Standard audio extensions (with optional query parameters)
-  const hasAudioExtension = /\.(mp3|m4a|wav|ogg|aac|webm|flac|opus|weba)(\?.*)?$/i.test(trimmed) ||
-    /(\.mp3|\.wav|\.m4a|\.ogg|\.aac|\.webm|\.flac|\.opus)(\?|$)/i.test(lower);
-
-  // Blob or Base64 audio
-  const isBlobOrData = trimmed.startsWith('blob:') || trimmed.startsWith('data:audio');
-
-  return hasAudioExtension || isStorageAudio || isBlobOrData || (isKnownAudioHost && !lower.endsWith('.html') && !lower.endsWith('.php'));
+  return true;
 }
 
 /**
  * Safely resolves audio URL for a recitation record.
  * Follows strict priority order:
- * 1. Storage Path / File (audio_storage_path / audioStoragePath)
- * 2. External Audio URL (external_audio_url / externalAudioUrl)
+ * 1. External Audio URL (external_audio_url / externalAudioUrl)
+ * 2. Storage Path / File (audio_storage_path / audioStoragePath)
  * 3. Direct audio_url / audioUrl
- * 4. NEVER returns default/fallback/surah audio. Returns empty string if no valid audio exists.
+ * 4. Returns empty string if no valid audio exists.
  */
 export function normalizeAudioUrl(record?: {
   audio_storage_path?: string | null;
@@ -153,7 +130,19 @@ export function normalizeAudioUrl(record?: {
 }): string {
   if (!record) return '';
 
-  // 1. Highest Priority: Check storage path (uploaded binary file)
+  // 1. First Priority: Check external audio URL
+  const external = record.external_audio_url || record.externalAudioUrl;
+  if (external && typeof external === 'string' && external.trim()) {
+    const trimmedExt = external.trim();
+    if (!trimmedExt.includes('/storage/v1/object/public/submission-audio/')) {
+      const directExt = transformGoogleDriveAudioUrl(trimmedExt);
+      if (isValidAudioUrl(directExt)) {
+        return directExt;
+      }
+    }
+  }
+
+  // 2. Second Priority: Check storage path (uploaded binary file to Supabase storage)
   const storagePath = record.audio_storage_path || record.audioStoragePath;
   if (
     storagePath &&
@@ -164,14 +153,13 @@ export function normalizeAudioUrl(record?: {
   ) {
     const trimmedPath = storagePath.trim();
 
-    // 1a. If already a full URL or blob URL
+    // 2a. If already a full URL or blob URL
     if (
       trimmedPath.startsWith('http://') ||
       trimmedPath.startsWith('https://') ||
       trimmedPath.startsWith('blob:') ||
       trimmedPath.startsWith('data:')
     ) {
-      // NEVER allow /object/public/submission-audio/
       if (trimmedPath.includes('/storage/v1/object/public/submission-audio/')) {
         return '';
       }
@@ -179,7 +167,7 @@ export function normalizeAudioUrl(record?: {
         return trimmedPath;
       }
     } else {
-      // 1b. Relative storage path (e.g. 'recitation-audio/rec_123.mp3' or 'submission-audio/sub_123.mp3')
+      // 2b. Relative storage path (e.g. 'recitation-audio/rec_123.mp3')
       const cleanPath = trimmedPath.startsWith('/') ? trimmedPath.slice(1) : trimmedPath;
       const parts = cleanPath.split('/').filter(Boolean);
 
@@ -201,18 +189,6 @@ export function normalizeAudioUrl(record?: {
     }
   }
 
-  // 2. Second Priority: Check external audio URL
-  const external = record.external_audio_url || record.externalAudioUrl;
-  if (external && typeof external === 'string' && external.trim()) {
-    const trimmedExt = external.trim();
-    if (!trimmedExt.includes('/storage/v1/object/public/submission-audio/')) {
-      const directExt = transformGoogleDriveAudioUrl(trimmedExt);
-      if (isValidAudioUrl(directExt)) {
-        return directExt;
-      }
-    }
-  }
-
   // 3. Third Priority: Check audio_url direct field
   const directAudioUrl = record.audio_url || record.audioUrl;
   if (directAudioUrl && typeof directAudioUrl === 'string' && directAudioUrl.trim()) {
@@ -225,6 +201,5 @@ export function normalizeAudioUrl(record?: {
     }
   }
 
-  // 4. No valid audio source exists - return empty string (DO NOT FALLBACK TO SURAH AUDIO)
   return '';
 }

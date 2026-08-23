@@ -747,7 +747,7 @@ export class SupabaseService {
 
   static async recordListenEvent(recitationId: string, installationId: string, durationSeconds: number, completed: boolean) {
     try {
-      await fetch(`${SUPABASE_CONFIG.restBaseUrl}/rpc/record_listen_event`, {
+      const res = await fetch(`${SUPABASE_CONFIG.restBaseUrl}/rpc/record_listen_event`, {
         method: 'POST',
         headers: this.headers,
         body: JSON.stringify({
@@ -757,6 +757,24 @@ export class SupabaseService {
           p_completed: completed
         })
       });
+
+      if (!res.ok) {
+        // Fallback: direct insert to listen_events table
+        await fetch(`${SUPABASE_CONFIG.restBaseUrl}/listen_events`, {
+          method: 'POST',
+          headers: {
+            ...this.headers,
+            'Prefer': 'return=minimal'
+          },
+          body: JSON.stringify({
+            recitation_id: recitationId,
+            anonymous_installation_id: installationId,
+            duration_seconds: durationSeconds,
+            listened_seconds: durationSeconds,
+            is_completed: completed
+          })
+        });
+      }
     } catch (e) {
       console.warn('Supabase recordListenEvent fallback', e);
     }

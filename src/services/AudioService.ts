@@ -68,14 +68,24 @@ export class AudioService {
           this.state.duration = this.audio.duration;
         }
 
-        // Record a single listen event when played for >= 5 seconds
+        // Calculate dynamic listen threshold:
+        // Requires listening for half the recitation (or min 5s, max 30s for long recitations)
+        const totalDuration = this.audio.duration || this.state.duration || this.state.currentRecitation?.duration || 0;
+        const listenThreshold = totalDuration > 0
+          ? Math.min(30, Math.max(5, Math.floor(totalDuration / 2)))
+          : 15;
+
+        // Record a single listen event when played past the required threshold
         if (
           !this.hasRecordedListenForTrack &&
           this.state.currentRecitation &&
-          this.audio.currentTime >= 5
+          this.audio.currentTime >= listenThreshold
         ) {
           this.hasRecordedListenForTrack = true;
           const currentRec = this.state.currentRecitation;
+          currentRec.listenCount += 1;
+          this.notifyListeners();
+
           recitationRepository
             .recordListenEvent({
               recitationId: currentRec.id,

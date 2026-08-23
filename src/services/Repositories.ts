@@ -185,7 +185,7 @@ class HybridRecitationRepository implements IRecitationRepository {
       ]);
       if (data && Array.isArray(data)) {
         this.userLikesMap.set(installId, userLikes);
-        return data.map((d: any) => ({
+        this.recitations = data.map((d: any) => ({
           id: d.id,
           reciterId: d.reciter_id,
           reciterName: d.reciter_name || 'قارئ',
@@ -200,13 +200,14 @@ class HybridRecitationRepository implements IRecitationRepository {
           durationFormatted: `${Math.floor((Number(d.duration_seconds) || 180) / 60).toString().padStart(2, '0')}:${((Number(d.duration_seconds) || 180) % 60).toString().padStart(2, '0')}`,
           audioUrl: SupabaseService.resolveAudioUrl(d),
           coverUrl: d.cover_image_path ? SupabaseService.resolveImageUrl(d.cover_image_path, 'recitation-covers') : undefined,
-          listenCount: Number(d.listen_count) || 0,
-          likeCount: Number(d.like_count) || 0,
+          listenCount: Number(d.listen_count ?? d.total_listens ?? 0),
+          likeCount: Number(d.like_count ?? d.total_likes ?? 0),
           isLiked: userLikes.has(d.id),
           isStaffPick: !!d.is_staff_pick,
           description: d.description || '',
           createdAt: d.published_at || d.created_at || new Date().toISOString()
         }));
+        return [...this.recitations];
       }
       return [];
     }
@@ -240,8 +241,8 @@ class HybridRecitationRepository implements IRecitationRepository {
           durationFormatted: `${Math.floor((Number(d.duration_seconds) || 180) / 60).toString().padStart(2, '0')}:${((Number(d.duration_seconds) || 180) % 60).toString().padStart(2, '0')}`,
           audioUrl: SupabaseService.resolveAudioUrl(d),
           coverUrl: d.cover_image_path ? SupabaseService.resolveImageUrl(d.cover_image_path, 'recitation-covers') : undefined,
-          listenCount: Number(d.listen_count) || 0,
-          likeCount: Number(d.like_count) || 0,
+          listenCount: Number(d.listen_count ?? d.total_listens ?? 0),
+          likeCount: Number(d.like_count ?? d.total_likes ?? 0),
           isLiked: userLikes.has(d.id),
           isStaffPick: !!d.is_staff_pick,
           description: d.description || '',
@@ -355,13 +356,67 @@ class HybridStatisticsRepository implements IStatisticsRepository {
   }
 
   async getMostListenedReciters(limit: number = 10): Promise<Reciter[]> {
-    const all = await this.reciterRepo.getAllReciters();
-    return [...all].sort((a, b) => b.stats.totalListens - a.stats.totalListens).slice(0, limit);
+    const [allReciters, allRecitations] = await Promise.all([
+      this.reciterRepo.getAllReciters(),
+      this.recitationRepo.getAllRecitations()
+    ]);
+    const reciterListensMap = new Map<string, number>();
+    const reciterLikesMap = new Map<string, number>();
+    const reciterCountMap = new Map<string, number>();
+
+    allRecitations.forEach((r) => {
+      reciterListensMap.set(r.reciterId, (reciterListensMap.get(r.reciterId) || 0) + (r.listenCount || 0));
+      reciterLikesMap.set(r.reciterId, (reciterLikesMap.get(r.reciterId) || 0) + (r.likeCount || 0));
+      reciterCountMap.set(r.reciterId, (reciterCountMap.get(r.reciterId) || 0) + 1);
+    });
+
+    const enriched = allReciters.map((rec) => {
+      const recListens = reciterListensMap.get(rec.id);
+      const recLikes = reciterLikesMap.get(rec.id);
+      const recCount = reciterCountMap.get(rec.id);
+      return {
+        ...rec,
+        stats: {
+          totalRecitations: recCount !== undefined ? Math.max(rec.stats.totalRecitations, recCount) : rec.stats.totalRecitations,
+          totalListens: recListens !== undefined ? Math.max(rec.stats.totalListens, recListens) : rec.stats.totalListens,
+          totalLikes: recLikes !== undefined ? Math.max(rec.stats.totalLikes, recLikes) : rec.stats.totalLikes
+        }
+      };
+    });
+
+    return [...enriched].sort((a, b) => b.stats.totalListens - a.stats.totalListens).slice(0, limit);
   }
 
   async getMostLikedReciters(limit: number = 10): Promise<Reciter[]> {
-    const all = await this.reciterRepo.getAllReciters();
-    return [...all].sort((a, b) => b.stats.totalLikes - a.stats.totalLikes).slice(0, limit);
+    const [allReciters, allRecitations] = await Promise.all([
+      this.reciterRepo.getAllReciters(),
+      this.recitationRepo.getAllRecitations()
+    ]);
+    const reciterLikesMap = new Map<string, number>();
+    const reciterListensMap = new Map<string, number>();
+    const reciterCountMap = new Map<string, number>();
+
+    allRecitations.forEach((r) => {
+      reciterListensMap.set(r.reciterId, (reciterListensMap.get(r.reciterId) || 0) + (r.listenCount || 0));
+      reciterLikesMap.set(r.reciterId, (reciterLikesMap.get(r.reciterId) || 0) + (r.likeCount || 0));
+      reciterCountMap.set(r.reciterId, (reciterCountMap.get(r.reciterId) || 0) + 1);
+    });
+
+    const enriched = allReciters.map((rec) => {
+      const recListens = reciterListensMap.get(rec.id);
+      const recLikes = reciterLikesMap.get(rec.id);
+      const recCount = reciterCountMap.get(rec.id);
+      return {
+        ...rec,
+        stats: {
+          totalRecitations: recCount !== undefined ? Math.max(rec.stats.totalRecitations, recCount) : rec.stats.totalRecitations,
+          totalListens: recListens !== undefined ? Math.max(rec.stats.totalListens, recListens) : rec.stats.totalListens,
+          totalLikes: recLikes !== undefined ? Math.max(rec.stats.totalLikes, recLikes) : rec.stats.totalLikes
+        }
+      };
+    });
+
+    return [...enriched].sort((a, b) => b.stats.totalLikes - a.stats.totalLikes).slice(0, limit);
   }
 
   async getNewestRecitations(limit: number = 10): Promise<Recitation[]> {

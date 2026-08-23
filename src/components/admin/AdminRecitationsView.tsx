@@ -126,9 +126,17 @@ export function AdminRecitationsView() {
   }, [selectedReciterFilter]);
 
   const togglePlay = (rec: any) => {
-    const url = SupabaseService.resolveAudioUrl(rec);
-
-    if (!url) return;
+    let url = SupabaseService.resolveAudioUrl(rec);
+    if (!url && rec.external_audio_url) {
+      url = rec.external_audio_url;
+    }
+    if (!url && rec.audio_storage_path) {
+      url = SupabaseService.getStoragePublicUrl(rec.audio_storage_path, 'recitation-audio');
+    }
+    if (!url) {
+      alert('لا يوجد رابط صوت صالح للمعاينة');
+      return;
+    }
 
     if (playingId === rec.id) {
       audioElem?.pause();
@@ -137,9 +145,14 @@ export function AdminRecitationsView() {
       audioElem?.pause();
       const a = new Audio(url);
       a.onended = () => setPlayingId(null);
-      a.onerror = () => setPlayingId(null);
+      a.onerror = (e) => {
+        console.warn('Audio preview failed:', e);
+        alert('تعذر تشغيل ملف الصوت، يرجى التحقق من الرابط');
+        setPlayingId(null);
+      };
       a.play().catch((err) => {
         console.warn('Recitation preview error:', err);
+        alert(`تعذر تشغيل الصوت: ${err.message || 'تأكد من صلاحية الرابط'}`);
         setPlayingId(null);
       });
       setAudioElem(a);
@@ -212,6 +225,10 @@ export function AdminRecitationsView() {
     setIsSaving(true);
     setFormError(null);
 
+    const isHttp = (externalAudioUrl || '').trim().startsWith('http');
+    const finalExternal = isHttp ? externalAudioUrl.trim() : (audioStoragePath.trim().startsWith('http') ? audioStoragePath.trim() : null);
+    const finalStorage = !isHttp && !audioStoragePath.trim().startsWith('http') && audioStoragePath.trim() ? audioStoragePath.trim() : null;
+
     try {
       if (editingRecitation) {
         await adminService.updateRecitation(editingRecitation.id, {
@@ -222,8 +239,8 @@ export function AdminRecitationsView() {
           ayahEnd: Number(ayahEnd),
           riwayah,
           durationSeconds: Number(durationSeconds),
-          audioStoragePath: audioStoragePath.trim(),
-          externalAudioUrl: externalAudioUrl.trim() ? externalAudioUrl : null,
+          audioStoragePath: finalStorage,
+          externalAudioUrl: finalExternal,
           coverImagePath: coverImagePath.trim() ? coverImagePath : null,
           description: description.trim(),
           isStaffPick,
@@ -238,8 +255,8 @@ export function AdminRecitationsView() {
           ayahEnd: Number(ayahEnd),
           riwayah,
           durationSeconds: Number(durationSeconds),
-          audioStoragePath: audioStoragePath.trim(),
-          externalAudioUrl: externalAudioUrl.trim() ? externalAudioUrl : undefined,
+          audioStoragePath: finalStorage,
+          externalAudioUrl: finalExternal,
           coverImagePath: coverImagePath.trim() ? coverImagePath : undefined,
           description: description.trim() ? description : undefined,
           isStaffPick,
@@ -662,23 +679,50 @@ export function AdminRecitationsView() {
 
               <div className="space-y-1">
                 <label className="block font-semibold text-[#A8C2B3]">رابط الصوت المباشر أو مسار التخزين *</label>
-                <input
-                  type="text"
-                  required
-                  value={externalAudioUrl || audioStoragePath}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    if (val.startsWith('http')) {
-                      setExternalAudioUrl(val);
-                      setAudioStoragePath(val.split('/').pop() || 'recitation.mp3');
-                    } else {
-                      setAudioStoragePath(val);
-                    }
-                  }}
-                  placeholder="https://server8.mp3quran.net/afs/001.mp3 أو recitation-audio/rec_123.mp3"
-                  className="w-full bg-[#0D1813] border border-[#264436] rounded-xl px-3 py-2 text-white focus:outline-none"
-                  dir="ltr"
-                />
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    required
+                    value={externalAudioUrl || audioStoragePath}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val.trim().startsWith('http://') || val.trim().startsWith('https://')) {
+                        setExternalAudioUrl(val.trim());
+                        setAudioStoragePath('');
+                      } else {
+                        setAudioStoragePath(val);
+                        setExternalAudioUrl('');
+                      }
+                    }}
+                    placeholder="https://server8.mp3quran.net/afs/001.mp3 أو recitation-audio/rec_123.mp3"
+                    className="flex-1 bg-[#0D1813] border border-[#264436] rounded-xl px-3 py-2 text-white focus:outline-none text-xs"
+                    dir="ltr"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const link = externalAudioUrl || audioStoragePath;
+                      if (!link) {
+                        alert('يرجى إدخال رابط صوتي أولاً لتجربته');
+                        return;
+                      }
+                      const resolved = SupabaseService.resolveAudioUrl({
+                        external_audio_url: externalAudioUrl,
+                        audio_storage_path: audioStoragePath
+                      }) || link;
+                      
+                      const a = new Audio(resolved);
+                      a.play().then(() => {
+                        alert('جاري تشغيل ومعاينة الرابط الصوتي بنجاح!');
+                      }).catch((err) => {
+                        alert(`تعذر تشغيل الرابط: ${err.message || 'يرجى التأكد من صحة الرابط'}`);
+                      });
+                    }}
+                    className="px-3 py-2 bg-[#1B382B] hover:bg-[#254C3B] text-[#D4AF37] border border-[#2B5742] rounded-xl font-bold text-xs whitespace-nowrap"
+                  >
+                    تجربة الرابط
+                  </button>
+                </div>
               </div>
 
               <div className="space-y-1">

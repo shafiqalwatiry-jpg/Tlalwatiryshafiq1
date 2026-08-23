@@ -121,7 +121,7 @@ export const ReciterProfileModal: React.FC<ReciterProfileModalProps> = ({
                 <span>التلاوات</span>
               </div>
               <p className="text-base sm:text-lg font-bold text-white mt-0.5">
-                {reciter.stats.totalRecitations}
+                {Math.max(reciter.stats.totalRecitations, reciterRecitations.length)}
               </p>
             </div>
 
@@ -131,7 +131,10 @@ export const ReciterProfileModal: React.FC<ReciterProfileModalProps> = ({
                 <span>الاستماعات</span>
               </div>
               <p className="text-base sm:text-lg font-bold text-white mt-0.5">
-                {reciter.stats.totalListens.toLocaleString('ar-EG')}
+                {Math.max(
+                  reciter.stats.totalListens,
+                  reciterRecitations.reduce((acc, curr) => acc + (curr.listenCount || 0), 0)
+                ).toLocaleString('ar-EG')}
               </p>
             </div>
 
@@ -141,7 +144,10 @@ export const ReciterProfileModal: React.FC<ReciterProfileModalProps> = ({
                 <span>الإعجابات</span>
               </div>
               <p className="text-base sm:text-lg font-bold text-white mt-0.5">
-                {reciter.stats.totalLikes.toLocaleString('ar-EG')}
+                {Math.max(
+                  reciter.stats.totalLikes,
+                  reciterRecitations.reduce((acc, curr) => acc + (curr.likeCount || 0), 0)
+                ).toLocaleString('ar-EG')}
               </p>
             </div>
           </div>
