@@ -2020,10 +2020,137 @@ class AdminServiceImpl {
   }
 
   async toggleUserSuspension(userId: string, isSuspended: boolean, suspendedReason?: string): Promise<void> {
+    const reason = isSuspended ? suspendedReason || 'مخالفة معايير وشروط استخدام منصة تلاوتك للعالم' : null;
     await this.updateUser(userId, {
       isSuspended,
-      suspendedReason: isSuspended ? suspendedReason || 'مخالفة معايير وشروط استخدام منصة تلاوتك للعالم' : null
+      suspendedReason: reason
     });
+
+    try {
+      const userRes = await fetch(`${SUPABASE_CONFIG.restBaseUrl}/user_profiles?id=eq.${encodeURIComponent(userId)}&select=installation_id`, {
+        headers: this.getAuthHeaders()
+      });
+      if (userRes.ok) {
+        const rows = await userRes.json();
+        if (Array.isArray(rows) && rows[0]?.installation_id) {
+          const instId = rows[0].installation_id;
+          const notifTitle = isSuspended ? 'إيقاف حسابك مؤقتًا' : 'إعادة تفعيل حسابك';
+          const notifBody = isSuspended 
+            ? `تم تقييد إمكانية رفع وتلاوة المحتوى في حسابك.${reason ? ` السبب: ${reason}` : ''}`
+            : 'تم رفع القيود عن حسابك وبإمكانك الآن رفع واستخدام المنصة بحرية.';
+          
+          await fetch(`${SUPABASE_CONFIG.restBaseUrl}/user_notifications`, {
+            method: 'POST',
+            headers: {
+              ...this.getAuthHeaders(),
+              'Prefer': 'return=minimal'
+            },
+            body: JSON.stringify({
+              installation_id: instId,
+              title: notifTitle,
+              body: notifBody,
+              notification_type: isSuspended ? 'ACCOUNT_SUSPENDED' : 'ACCOUNT_UNSUSPENDED',
+              is_read: false
+            })
+          });
+
+          await this.logUserActivity(
+            instId, 
+            isSuspended ? 'USER_SUSPENDED' : 'USER_UNSUSPENDED', 
+            isSuspended ? `تم حظر الحساب. السبب: ${reason}` : 'تم رفع الحظر وإعادة تنشيط الحساب'
+          );
+        }
+      }
+    } catch (e) {
+      console.warn('toggleUserSuspension notification / activity log error:', e);
+    }
+  }
+
+  async getUserActivityLogs(installationId: string): Promise<any[]> {
+    if (!installationId) return [];
+    try {
+      const res = await fetch(`${SUPABASE_CONFIG.restBaseUrl}/user_activity_logs?installation_id=eq.${encodeURIComponent(installationId)}&order=created_at.desc`, {
+        headers: this.getAuthHeaders()
+      });
+      if (res.ok) {
+        const rows = await res.json();
+        if (Array.isArray(rows)) {
+          return rows.map((r: any) => ({
+            id: r.id,
+            installationId: r.installation_id,
+            eventType: r.event_type,
+            description: r.description,
+            adminName: r.admin_name,
+            metadata: r.metadata,
+            createdAt: r.created_at
+          }));
+        }
+      }
+    } catch (e) {
+      console.warn('getUserActivityLogs error:', e);
+    }
+    return [];
+  }
+
+  async logUserActivity(installationId: string, eventType: string, description: string, adminName?: string, metadata?: any): Promise<void> {
+    if (!installationId) return;
+    try {
+      await fetch(`${SUPABASE_CONFIG.restBaseUrl}/user_activity_logs`, {
+        method: 'POST',
+        headers: {
+          ...this.getAuthHeaders(),
+          'Prefer': 'return=minimal'
+        },
+        body: JSON.stringify({
+          installation_id: installationId,
+          event_type: eventType,
+          description: description,
+          admin_name: adminName || this.authState.admin?.fullName || 'المسؤول',
+          metadata: metadata || null
+        })
+      });
+    } catch (e) {
+      console.warn('logUserActivity error:', e);
+    }
+  }
+
+  async getUserRecitations(installationId: string, displayName?: string): Promise<any[]> {
+    if (!installationId && !displayName) return [];
+    try {
+      let query = `${SUPABASE_CONFIG.restBaseUrl}/recitation_submissions?select=*&order=created_at.desc`;
+      if (installationId) {
+        query += `&installation_id=eq.${encodeURIComponent(installationId)}`;
+      } else if (displayName) {
+        query += `&display_name=eq.${encodeURIComponent(displayName)}`;
+      }
+      const res = await fetch(query, {
+        headers: this.getAuthHeaders()
+      });
+      if (res.ok) {
+        const rows = await res.json();
+        if (Array.isArray(rows)) {
+          return rows.map((r: any) => ({
+            id: r.id,
+            installationId: r.installation_id,
+            surahNumber: r.surah_number,
+            surahName: r.surah_name,
+            ayahStart: r.ayah_start,
+            ayahEnd: r.ayah_end,
+            riwayah: r.riwayah,
+            status: r.status,
+            createdAt: r.created_at,
+            audioStoragePath: r.audio_storage_path,
+            externalAudioUrl: r.external_audio_url,
+            listenCount: r.listen_count || r.listens_count || 0,
+            likeCount: r.like_count || r.likes_count || 0,
+            rejectionReason: r.rejection_reason
+          }));
+        }
+      }
+    } catch (e) {
+      console.warn('getUserRecitations error:', e);
+    }
+    return [];
   }
 
   async deleteUser(userId: string): Promise<void> {
