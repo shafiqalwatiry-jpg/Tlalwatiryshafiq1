@@ -56,10 +56,28 @@ export const ReciterProfileModal: React.FC<ReciterProfileModalProps> = ({
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
       <div className="bg-[#FAFBF9] rounded-3xl w-full max-w-2xl border border-[#E2E5DF] shadow-2xl overflow-hidden my-auto max-h-[90vh] flex flex-col">
         {/* Header with Cover Banner */}
-        <div className="relative bg-gradient-to-r from-[#102A20] via-[#1A3F31] to-[#315F4A] p-6 text-white">
+        <div className="relative bg-gradient-to-r from-[#102A20] via-[#1A3F31] to-[#315F4A] p-6 text-white overflow-hidden">
+          {reciter.bannerUrl && (
+            <div className="absolute inset-0 z-0">
+              <img
+                src={reciter.bannerUrl}
+                alt="Banner"
+                referrerPolicy="no-referrer"
+                className="w-full h-full object-cover filter brightness-75"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-[#102A20]/95 via-[#102A20]/75 to-[#102A20]/40"></div>
+            </div>
+          )}
+
+          {reciter.logoUrl && (
+            <div className="absolute left-6 top-6 z-0 pointer-events-none opacity-20 w-32 h-32 hidden sm:block">
+              <img src={reciter.logoUrl} alt="Logo Watermark" referrerPolicy="no-referrer" className="w-full h-full object-contain filter drop-shadow-lg" />
+            </div>
+          )}
+
           <button
             onClick={onClose}
-            className="absolute top-4 left-4 w-9 h-9 rounded-full bg-black/30 hover:bg-black/50 text-white flex items-center justify-center transition-colors backdrop-blur-xs"
+            className="absolute top-4 left-4 z-20 w-9 h-9 rounded-full bg-black/30 hover:bg-black/50 text-white flex items-center justify-center transition-colors backdrop-blur-xs"
             title="إغلاق"
           >
             <X className="w-5 h-5" />
@@ -67,13 +85,13 @@ export const ReciterProfileModal: React.FC<ReciterProfileModalProps> = ({
 
           <button
             onClick={handleShare}
-            className="absolute top-4 left-16 w-9 h-9 rounded-full bg-white/20 hover:bg-white/30 text-white flex items-center justify-center transition-colors backdrop-blur-xs"
+            className="absolute top-4 left-16 z-20 w-9 h-9 rounded-full bg-white/20 hover:bg-white/30 text-white flex items-center justify-center transition-colors backdrop-blur-xs"
             title="مشاركة الملف الشخصي"
           >
             <Share2 className="w-4 h-4" />
           </button>
 
-          <div className="flex flex-col sm:flex-row items-center sm:items-start gap-4 pt-2">
+          <div className="relative z-10 flex flex-col sm:flex-row items-center sm:items-start gap-4 pt-2">
             <div className="relative">
               <img
                 src={reciter.avatarUrl}
@@ -106,7 +124,7 @@ export const ReciterProfileModal: React.FC<ReciterProfileModalProps> = ({
               </div>
 
               {reciter.bio && (
-                <p className="text-xs text-[#E2E5DF]/80 mt-2.5 leading-relaxed max-w-lg">
+                <p className="text-xs text-[#E2E5DF]/90 mt-2.5 leading-relaxed max-w-lg">
                   {reciter.bio}
                 </p>
               )}
@@ -114,7 +132,7 @@ export const ReciterProfileModal: React.FC<ReciterProfileModalProps> = ({
           </div>
 
           {/* Stats Bar in Banner */}
-          <div className="grid grid-cols-3 gap-2 mt-6 pt-4 border-t border-white/15 text-center">
+          <div className="relative z-10 grid grid-cols-3 gap-2 mt-6 pt-4 border-t border-white/15 text-center">
             <div className="bg-black/20 rounded-xl p-2 backdrop-blur-xs">
               <div className="flex items-center justify-center gap-1 text-[#F4E8CE] text-xs">
                 <BookOpen className="w-3.5 h-3.5" />

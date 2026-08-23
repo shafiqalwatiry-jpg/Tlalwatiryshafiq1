@@ -114,6 +114,11 @@ export const RecitationCard: React.FC<RecitationCardProps> = ({
 
             <div>
               <div className="flex items-center gap-2">
+                {recitation.reciterLogoUrl ? (
+                  <img src={recitation.reciterLogoUrl} alt="Logo" referrerPolicy="no-referrer" className="w-5 h-5 object-contain rounded" />
+                ) : recitation.reciterBannerUrl ? (
+                  <img src={recitation.reciterBannerUrl} alt="Banner" referrerPolicy="no-referrer" className="w-6 h-5 object-cover rounded" />
+                ) : null}
                 <h4 className="font-bold text-base text-[#193B4D] font-amiri leading-tight">
                   {recitation.surahNameArabic}
                 </h4>
@@ -124,7 +129,15 @@ export const RecitationCard: React.FC<RecitationCardProps> = ({
                 )}
               </div>
 
-              <p className="text-xs text-[#6C8795] font-tajawal mt-1 flex items-center gap-1.5">
+              <p className="text-xs text-[#6C8795] font-tajawal mt-1 flex items-center gap-1.5 flex-wrap">
+                <span
+                  onClick={() => onReciterClick?.(recitation.reciterId)}
+                  className="cursor-pointer hover:text-[#1687C7] font-bold text-[#193B4D] transition-colors flex items-center gap-1"
+                >
+                  <img src={recitation.reciterAvatar} alt="" referrerPolicy="no-referrer" className="w-4 h-4 rounded-full object-cover inline-block" />
+                  <span>{recitation.reciterName}</span>
+                </span>
+                <span>•</span>
                 <span>{recitation.ayahRange || 'كاملة'}</span>
                 <span>•</span>
                 <span className="text-[#1687C7] font-semibold">{recitation.riwayah}</span>
@@ -139,32 +152,8 @@ export const RecitationCard: React.FC<RecitationCardProps> = ({
           </div>
         </div>
 
-        {/* Reciter Info */}
-        <div
-          onClick={() => onReciterClick?.(recitation.reciterId)}
-          className="mt-3.5 flex items-center gap-2.5 p-2.5 rounded-2xl bg-[#F6FBFF] border border-[#D8E8F2] cursor-pointer hover:bg-[#E7F7FD] hover:border-[#55BFEA]/50 transition-colors"
-        >
-          <img
-            src={recitation.reciterAvatar}
-            alt={recitation.reciterName}
-            referrerPolicy="no-referrer"
-            className="w-8 h-8 rounded-full object-cover border border-[#D8E8F2]"
-          />
-          <div className="flex-1 min-w-0">
-            <p className="text-xs font-bold text-[#193B4D] truncate">
-              {recitation.reciterName}
-            </p>
-            <p className="text-[10px] text-[#6C8795] truncate">
-              {recitation.reciterCountry}
-            </p>
-          </div>
-          <span className="text-[10px] text-[#1687C7] font-bold px-2 py-0.5 rounded-lg bg-white border border-[#D8E8F2]">
-            الملف
-          </span>
-        </div>
-
         {recitation.description && (
-          <p className="text-xs text-[#6C8795] mt-2.5 line-clamp-1 italic">
+          <p className="text-xs text-[#6C8795] mt-3 line-clamp-1 italic bg-[#F6FBFF] p-2 rounded-xl border border-[#D8E8F2]/60">
             "{recitation.description}"
           </p>
         )}

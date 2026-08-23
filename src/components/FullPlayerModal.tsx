@@ -63,8 +63,15 @@ export const FullPlayerModal: React.FC<FullPlayerModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-[#07131B]/90 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto font-tajawal" dir="rtl">
-      <div className="bg-[#0B1E2B] text-white rounded-3xl w-full max-w-lg border border-[#1E435E] shadow-2xl p-6 relative flex flex-col justify-between my-auto max-h-[92vh]">
+    <div className="fixed inset-0 z-50 bg-[#07131B]/90 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto font-tajawal relative overflow-hidden" dir="rtl">
+      {/* Reciter Banner Background if available */}
+      {current.reciterBannerUrl && (
+        <div className="absolute inset-0 z-0 pointer-events-none opacity-25 filter blur-xl">
+          <img src={current.reciterBannerUrl} alt="" referrerPolicy="no-referrer" className="w-full h-full object-cover" />
+        </div>
+      )}
+
+      <div className="bg-[#0B1E2B]/95 text-white rounded-3xl w-full max-w-lg border border-[#1E435E] shadow-2xl p-6 relative z-10 flex flex-col justify-between my-auto max-h-[92vh]">
         {/* Top Header Actions */}
         <div className="flex items-center justify-between border-b border-[#1A3A50] pb-4 mb-4">
           <button

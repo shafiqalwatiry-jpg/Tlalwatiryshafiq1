@@ -856,6 +856,8 @@ class AdminServiceImpl {
     country: string;
     bio: string;
     profileImagePath?: string;
+    bannerImagePath?: string;
+    logoImagePath?: string;
     isVerified: boolean;
     isFeatured: boolean;
     isPublished: boolean;
@@ -876,6 +878,8 @@ class AdminServiceImpl {
         country: data.country || 'العالم الإسلامي',
         bio: data.bio || '',
         profile_image_path: data.profileImagePath || null,
+        banner_image_path: data.bannerImagePath || null,
+        logo_image_path: data.logoImagePath || null,
         is_verified: !!data.isVerified,
         is_featured: !!data.isFeatured,
         is_published: data.isPublished !== false
@@ -913,6 +917,8 @@ class AdminServiceImpl {
       country: string;
       bio: string;
       profileImagePath: string | null;
+      bannerImagePath: string | null;
+      logoImagePath: string | null;
       isVerified: boolean;
       isFeatured: boolean;
       isPublished: boolean;
@@ -926,6 +932,8 @@ class AdminServiceImpl {
     if (data.country !== undefined) payload.country = data.country;
     if (data.bio !== undefined) payload.bio = data.bio ?? '';
     if (data.profileImagePath !== undefined) payload.profile_image_path = data.profileImagePath;
+    if (data.bannerImagePath !== undefined) payload.banner_image_path = data.bannerImagePath;
+    if (data.logoImagePath !== undefined) payload.logo_image_path = data.logoImagePath;
     if (data.isVerified !== undefined) payload.is_verified = data.isVerified;
     if (data.isFeatured !== undefined) payload.is_featured = data.isFeatured;
     if (data.isPublished !== undefined) payload.is_published = data.isPublished;

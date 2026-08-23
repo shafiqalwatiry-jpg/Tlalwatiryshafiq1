@@ -21,6 +21,8 @@ export interface Reciter {
   countryCode: string;
   bio: string;
   avatarUrl: string;
+  bannerUrl?: string;
+  logoUrl?: string;
   verified: boolean;
   isStaffPick?: boolean;
   stats: {
@@ -36,6 +38,8 @@ export interface Recitation {
   reciterId: string;
   reciterName: string;
   reciterAvatar: string;
+  reciterBannerUrl?: string;
+  reciterLogoUrl?: string;
   reciterCountry: string;
   surahNumber: number;
   surahNameArabic: string;
