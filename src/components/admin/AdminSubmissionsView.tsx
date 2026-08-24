@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { adminService } from '../../services/AdminService';
-import { SupabaseService } from '../../services/SupabaseService';
+import { SupabaseService, supabase } from '../../services/SupabaseService';
 import { userService } from '../../services/UserService';
 import { RecitationSubmission, SubmissionStatus } from '../../types';
 import { isValidAudioUrl } from '../../utils/mediaUtils';
@@ -68,6 +68,21 @@ export function AdminSubmissionsView() {
 
   useEffect(() => {
     loadSubmissions();
+
+    const channel = supabase
+      .channel('realtime:admin_submissions')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'recitation_submissions' },
+        () => {
+          loadSubmissions();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [activeFilter]);
 
   // Audio preview cleanup

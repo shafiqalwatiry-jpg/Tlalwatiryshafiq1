@@ -1940,26 +1940,6 @@ class AdminServiceImpl {
       dispatchedCount = payload.length;
     }
 
-    // Always dispatch to local active user session if applicable
-    const myProfile = userService.getProfile();
-    const myInstallId = userService.getInstallationId();
-    const matchesMe =
-      params.targetType === 'all' ||
-      (params.targetType === 'country' && myProfile?.country === params.targetValue) ||
-      (params.targetType === 'user_type' && myProfile?.userType === params.targetValue) ||
-      (params.targetType === 'incomplete_profile' && !myProfile?.isProfileCompleted) ||
-      (params.targetType === 'specific_user' && (params.targetValue === myInstallId || params.targetValue === myProfile?.id));
-
-    if (matchesMe) {
-      userService.addNotification({
-        installationId: myInstallId,
-        title: params.title,
-        body: params.body,
-        notificationType: (params.notificationType as any) || 'ADMIN_ANNOUNCEMENT'
-      });
-      dispatchedCount = Math.max(1, dispatchedCount);
-    }
-
     return { success: true, dispatchedCount };
   }
 

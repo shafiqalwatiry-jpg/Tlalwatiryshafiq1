@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { adminService } from '../../services/AdminService';
 import { AdminNotification } from '../../types';
 import { CountrySelectField } from '../CountrySelectField';
+import { supabase } from '../../services/SupabaseService';
 import {
   Bell,
   CheckCircle,
@@ -78,6 +79,51 @@ export function AdminNotificationsView() {
 
   useEffect(() => {
     loadNotifications();
+
+    const channel = supabase
+      .channel('realtime:admin_notifications')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'admin_notifications' },
+        (payload) => {
+          if (payload.eventType === 'INSERT') {
+            const r: any = payload.new;
+            if (r) {
+              const mapped: AdminNotification = {
+                id: r.id,
+                notificationType: r.notification_type || 'SYSTEM_INFO',
+                title: r.title,
+                content: r.content || r.message || '',
+                referenceId: r.reference_id,
+                isRead: !!r.is_read,
+                sentViaEmail: !!r.sent_via_email,
+                createdAt: r.created_at
+              };
+              setNotifications((prev) => {
+                if (prev.some((n) => n.id === mapped.id)) return prev;
+                return [mapped, ...prev];
+              });
+            }
+          } else if (payload.eventType === 'UPDATE') {
+            const r: any = payload.new;
+            if (r) {
+              setNotifications((prev) =>
+                prev.map((n) => (n.id === r.id ? { ...n, isRead: !!r.is_read, title: r.title, content: r.content || r.message || n.content } : n))
+              );
+            }
+          } else if (payload.eventType === 'DELETE') {
+            const oldRow: any = payload.old;
+            if (oldRow?.id) {
+              setNotifications((prev) => prev.filter((n) => n.id !== oldRow.id));
+            }
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   useEffect(() => {

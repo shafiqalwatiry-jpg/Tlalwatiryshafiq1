@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { UserProfile } from '../types';
 import { userService } from '../services/UserService';
 import { adminService } from '../services/AdminService';
@@ -44,6 +44,18 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
   const [isUploading, setIsUploading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [successMsg, setSuccessMsg] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const p = userService.getProfile();
+    setDisplayName(p.displayName === 'زائر المنصة' ? '' : p.displayName || '');
+    setAvatarUrl(p.avatarUrl || '');
+    setCountry(p.country || 'المملكة العربية السعودية');
+    setUserType(p.userType || 'LISTENER');
+    setBio(p.bio || '');
+    setEmail(p.email || '');
+    setWhatsapp(p.whatsapp || '');
+  }, [isOpen]);
 
   if (!isOpen) return null;
 

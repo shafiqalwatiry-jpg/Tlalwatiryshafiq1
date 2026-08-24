@@ -1,11 +1,12 @@
 /**
  * UserService & NotificationService
- * Manages guest installation ID, user profiles (visitor-first), and real personal notification records.
+ * Supabase-first reactive identity, user profiles, and real-time personal notification records.
  */
 
 import { UserProfile, UserNotification } from '../types';
-import { SUPABASE_CONFIG } from './SupabaseService';
+import { SUPABASE_CONFIG, supabase } from './SupabaseService';
 import { triggerSystemNotification } from '../utils/notificationUtils';
+import type { RealtimeChannel } from '@supabase/supabase-js';
 
 const INSTALLATION_KEY = 'tilawatak_installation_id';
 const USER_PROFILE_KEY = 'tilawatak_user_profile_v1';
@@ -19,12 +20,18 @@ export class UserService {
   private listeners: Set<(profile: UserProfile | null) => void> = new Set();
   private notificationListeners: Set<(notifs: UserNotification[]) => void> = new Set();
 
+  private profileRealtimeChannel: RealtimeChannel | null = null;
+  private notifRealtimeChannel: RealtimeChannel | null = null;
+  private fallbackSyncTimer: any = null;
+
   private constructor() {
     if (typeof window !== 'undefined') {
       this.initInstallation();
       this.loadLocalProfile();
       this.loadNotifications();
       this.ensureVisitorRegistered();
+      this.initRealtimeSubscriptions();
+      this.startFallbackPolling();
     }
   }
 
@@ -44,43 +51,181 @@ export class UserService {
     this.currentInstallationId = installId;
   }
 
-  public async ensureVisitorRegistered(): Promise<void> {
-    const installId = this.getInstallationId();
-    const profile = this.getProfile();
-    try {
-      const payload = {
-        installation_id: installId,
-        display_name: profile.displayName || 'زائر المنصة',
-        avatar_url: profile.avatarUrl || null,
-        country: profile.country || 'العالم الإسلامي',
-        user_type: profile.userType || 'LISTENER',
-        bio: profile.bio || '',
-        email: profile.email || null,
-        whatsapp: profile.whatsapp || null,
-        is_profile_completed: profile.isProfileCompleted ?? false,
-        last_active_at: new Date().toISOString()
-      };
-
-      await fetch(`${SUPABASE_CONFIG.restBaseUrl}/user_profiles`, {
-        method: 'POST',
-        headers: {
-          'apikey': SUPABASE_CONFIG.anonKey,
-          'Authorization': `Bearer ${SUPABASE_CONFIG.anonKey}`,
-          'Content-Type': 'application/json',
-          'Prefer': 'resolution=merge-duplicates'
-        },
-        body: JSON.stringify(payload)
-      });
-    } catch (e) {
-      console.warn('Auto register visitor profile skipped:', e);
-    }
-  }
-
   public getInstallationId(): string {
     if (!this.currentInstallationId) {
       this.initInstallation();
     }
     return this.currentInstallationId;
+  }
+
+  /**
+   * Initializes Supabase Realtime Channels for user profile and notifications
+   */
+  private initRealtimeSubscriptions() {
+    const installId = this.getInstallationId();
+    if (!installId) return;
+
+    try {
+      // 1. Subscribe to User Profile changes (e.g. Admin updates, suspension, or deletion)
+      if (this.profileRealtimeChannel) {
+        supabase.removeChannel(this.profileRealtimeChannel);
+      }
+
+      this.profileRealtimeChannel = supabase
+        .channel(`realtime:user_profile_${installId}`)
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'user_profiles',
+            filter: `installation_id=eq.${installId}`
+          },
+          (payload) => {
+            if (payload.eventType === 'UPDATE' || payload.eventType === 'INSERT') {
+              const r: any = payload.new;
+              if (r) {
+                const updated: UserProfile = {
+                  id: r.id,
+                  installationId: r.installation_id,
+                  displayName: r.display_name || 'زائر المنصة',
+                  avatarUrl: r.avatar_url,
+                  country: r.country || 'العالم الإسلامي',
+                  userType: r.user_type || 'LISTENER',
+                  bio: r.bio || '',
+                  email: r.email,
+                  whatsapp: r.whatsapp,
+                  isProfileCompleted: !!r.is_profile_completed,
+                  isSuspended: !!r.is_suspended,
+                  suspendedReason: r.suspended_reason || undefined,
+                  lastActiveAt: r.last_active_at,
+                  createdAt: r.created_at
+                };
+                this.currentProfile = updated;
+                localStorage.setItem(USER_PROFILE_KEY, JSON.stringify(updated));
+                this.notifyProfileListeners();
+              }
+            } else if (payload.eventType === 'DELETE') {
+              // Admin deleted this user profile from database -> Reset cleanly
+              const resetProfile: UserProfile = {
+                installationId: installId,
+                displayName: 'زائر المنصة',
+                country: 'العالم الإسلامي',
+                userType: 'LISTENER',
+                isProfileCompleted: false,
+                lastActiveAt: new Date().toISOString(),
+                createdAt: new Date().toISOString()
+              };
+              this.currentProfile = resetProfile;
+              localStorage.setItem(USER_PROFILE_KEY, JSON.stringify(resetProfile));
+              this.notifyProfileListeners();
+            }
+          }
+        )
+        .subscribe();
+
+      // 2. Subscribe to In-App User Notifications (e.g. Submissions status, broadcasts, admin alerts)
+      if (this.notifRealtimeChannel) {
+        supabase.removeChannel(this.notifRealtimeChannel);
+      }
+
+      this.notifRealtimeChannel = supabase
+        .channel(`realtime:user_notifications_${installId}`)
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'user_notifications',
+            filter: `installation_id=eq.${installId}`
+          },
+          (payload) => {
+            if (payload.eventType === 'INSERT') {
+              const r: any = payload.new;
+              if (r) {
+                const newNotif: UserNotification = {
+                  id: r.id,
+                  installationId: r.installation_id,
+                  title: r.title,
+                  body: r.body,
+                  notificationType: r.notification_type || 'SUBMISSION_STATUS',
+                  referenceId: r.reference_id,
+                  rejectionReason: r.rejection_reason,
+                  isRead: !!r.is_read,
+                  createdAt: r.created_at
+                };
+
+                const exists = this.notifications.some((n) => n.id === newNotif.id);
+                if (!exists) {
+                  this.notifications = [newNotif, ...this.notifications];
+                  localStorage.setItem(USER_NOTIFICATIONS_KEY, JSON.stringify(this.notifications));
+                  this.notifyNotificationListeners();
+
+                  // Trigger native system / browser push notification
+                  triggerSystemNotification({
+                    id: newNotif.id,
+                    title: newNotif.title,
+                    body: newNotif.body,
+                    tag: newNotif.referenceId
+                  });
+                }
+              }
+            } else if (payload.eventType === 'UPDATE') {
+              const r: any = payload.new;
+              if (r) {
+                this.notifications = this.notifications.map((n) =>
+                  n.id === r.id
+                    ? {
+                        ...n,
+                        title: r.title,
+                        body: r.body,
+                        isRead: !!r.is_read,
+                        rejectionReason: r.rejection_reason
+                      }
+                    : n
+                );
+                localStorage.setItem(USER_NOTIFICATIONS_KEY, JSON.stringify(this.notifications));
+                this.notifyNotificationListeners();
+              }
+            } else if (payload.eventType === 'DELETE') {
+              const oldRow: any = payload.old;
+              if (oldRow?.id) {
+                this.notifications = this.notifications.filter((n) => n.id !== oldRow.id);
+                localStorage.setItem(USER_NOTIFICATIONS_KEY, JSON.stringify(this.notifications));
+                this.notifyNotificationListeners();
+              }
+            }
+          }
+        )
+        .subscribe();
+    } catch (err) {
+      console.warn('Realtime subscription setup warning:', err);
+    }
+  }
+
+  private startFallbackPolling() {
+    if (this.fallbackSyncTimer) return;
+    this.fallbackSyncTimer = setInterval(() => {
+      this.syncWithRemoteProfile().catch(() => {});
+      this.fetchRemoteNotifications().catch(() => {});
+    }, 20000);
+  }
+
+  public async ensureVisitorRegistered(): Promise<void> {
+    const installId = this.getInstallationId();
+    const profile = this.getProfile();
+    // Only update active timestamp if profile is already registered/completed or has remote ID
+    if (!profile.isProfileCompleted && !profile.id) {
+      return;
+    }
+    try {
+      await supabase
+        .from('user_profiles')
+        .update({ last_active_at: new Date().toISOString() })
+        .eq('installation_id', installId);
+    } catch (e) {
+      console.warn('Auto update visitor activity skipped:', e);
+    }
   }
 
   private loadLocalProfile() {
@@ -89,7 +234,6 @@ export class UserService {
       if (stored) {
         this.currentProfile = JSON.parse(stored);
       } else {
-        // Default Visitor Profile
         this.currentProfile = {
           installationId: this.getInstallationId(),
           displayName: 'زائر المنصة',
@@ -132,7 +276,7 @@ export class UserService {
           const remoteProfile: UserProfile = {
             id: r.id,
             installationId: r.installation_id,
-            displayName: r.display_name,
+            displayName: r.display_name || 'زائر المنصة',
             avatarUrl: r.avatar_url,
             country: r.country || 'العالم الإسلامي',
             userType: r.user_type || 'LISTENER',
@@ -149,6 +293,21 @@ export class UserService {
           localStorage.setItem(USER_PROFILE_KEY, JSON.stringify(remoteProfile));
           this.notifyProfileListeners();
           return remoteProfile;
+        } else if (Array.isArray(rows) && rows.length === 0 && this.currentProfile?.id) {
+          // If was previously registered but not found in DB anymore, it was deleted by admin
+          const freshVisitor: UserProfile = {
+            installationId: installId,
+            displayName: 'زائر المنصة',
+            country: 'العالم الإسلامي',
+            userType: 'LISTENER',
+            isProfileCompleted: false,
+            lastActiveAt: new Date().toISOString(),
+            createdAt: new Date().toISOString()
+          };
+          this.currentProfile = freshVisitor;
+          localStorage.setItem(USER_PROFILE_KEY, JSON.stringify(freshVisitor));
+          this.notifyProfileListeners();
+          return freshVisitor;
         }
       }
     } catch (e) {
@@ -190,9 +349,9 @@ export class UserService {
     localStorage.setItem(USER_PROFILE_KEY, JSON.stringify(merged));
     this.notifyProfileListeners();
 
-    // Push to Supabase user_profiles
+    // Push to Supabase user_profiles via upsert
     try {
-      const payload = {
+      const payload: any = {
         installation_id: installId,
         display_name: merged.displayName,
         avatar_url: merged.avatarUrl || null,
@@ -205,16 +364,19 @@ export class UserService {
         last_active_at: merged.lastActiveAt
       };
 
-      await fetch(`${SUPABASE_CONFIG.restBaseUrl}/user_profiles`, {
-        method: 'POST',
-        headers: {
-          'apikey': SUPABASE_CONFIG.anonKey,
-          'Authorization': `Bearer ${SUPABASE_CONFIG.anonKey}`,
-          'Content-Type': 'application/json',
-          'Prefer': 'resolution=merge-duplicates'
-        },
-        body: JSON.stringify(payload)
-      });
+      const { data, error } = await supabase
+        .from('user_profiles')
+        .upsert(payload, { onConflict: 'installation_id' })
+        .select('id, created_at')
+        .single();
+
+      if (!error && data?.id) {
+        merged.id = data.id;
+        if (data.created_at) merged.createdAt = data.created_at;
+        this.currentProfile = merged;
+        localStorage.setItem(USER_PROFILE_KEY, JSON.stringify(merged));
+        this.notifyProfileListeners();
+      }
     } catch (e) {
       console.warn('Save user profile remote sync error:', e);
     }
@@ -223,7 +385,7 @@ export class UserService {
   }
 
   // ==========================================
-  // Notifications System (DB + Local)
+  // Notifications System (DB-First + Realtime)
   // ==========================================
 
   private loadNotifications() {
@@ -265,7 +427,7 @@ export class UserService {
       );
       if (res.ok) {
         const rows = await res.json();
-        if (Array.isArray(rows) && rows.length > 0) {
+        if (Array.isArray(rows)) {
           const mapped: UserNotification[] = rows.map((r: any) => ({
             id: r.id,
             installationId: r.installation_id,
@@ -278,12 +440,9 @@ export class UserService {
             createdAt: r.created_at
           }));
 
-          // Merge with existing local and check for new unread to trigger system notifications
           const existingIds = new Set(this.notifications.map((n) => n.id));
-          const existingRefs = new Set(this.notifications.map((n) => n.referenceId).filter(Boolean));
-
           mapped.forEach((notif) => {
-            if (!notif.isRead && !existingIds.has(notif.id) && (!notif.referenceId || !existingRefs.has(notif.referenceId))) {
+            if (!notif.isRead && !existingIds.has(notif.id)) {
               triggerSystemNotification({
                 id: notif.id,
                 title: notif.title,
@@ -293,10 +452,7 @@ export class UserService {
             }
           });
 
-          const localOnly = this.notifications.filter(
-            (n) => !mapped.some((m) => m.id === n.id || (m.referenceId && m.referenceId === n.referenceId))
-          );
-          this.notifications = [...mapped, ...localOnly];
+          this.notifications = mapped;
           localStorage.setItem(USER_NOTIFICATIONS_KEY, JSON.stringify(this.notifications));
           this.notifyNotificationListeners();
           return this.notifications;
@@ -320,7 +476,6 @@ export class UserService {
     localStorage.setItem(USER_NOTIFICATIONS_KEY, JSON.stringify(this.notifications));
     this.notifyNotificationListeners();
 
-    // Trigger System Android/Web Notification
     triggerSystemNotification({
       id: newNotif.id,
       title: newNotif.title,
@@ -328,7 +483,6 @@ export class UserService {
       tag: newNotif.referenceId
     });
 
-    // Push to Supabase if possible
     try {
       fetch(`${SUPABASE_CONFIG.restBaseUrl}/user_notifications`, {
         method: 'POST',
@@ -399,3 +553,4 @@ export class UserService {
 }
 
 export const userService = UserService.getInstance();
+

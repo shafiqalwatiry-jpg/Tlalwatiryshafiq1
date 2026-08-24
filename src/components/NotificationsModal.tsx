@@ -11,7 +11,9 @@ import {
   Trophy,
   Award,
   Clock,
-  ExternalLink
+  ExternalLink,
+  ShieldAlert,
+  ShieldCheck
 } from 'lucide-react';
 
 interface NotificationsModalProps {
@@ -51,8 +53,13 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
     switch (type) {
       case 'SUBMISSION_STATUS':
         return <CheckCircle2 className="w-5 h-5 text-[#55BFEA]" />;
+      case 'ACCOUNT_SUSPENDED':
+        return <ShieldAlert className="w-5 h-5 text-rose-500" />;
+      case 'ACCOUNT_UNSUSPENDED':
+        return <ShieldCheck className="w-5 h-5 text-emerald-500" />;
       case 'ANNOUNCEMENT':
       case 'SYSTEM_BROADCAST':
+      case 'ADMIN_ANNOUNCEMENT':
         return <Megaphone className="w-5 h-5 text-[#1687C7]" />;
       case 'COMPETITION':
         return <Trophy className="w-5 h-5 text-[#F2C96B]" />;

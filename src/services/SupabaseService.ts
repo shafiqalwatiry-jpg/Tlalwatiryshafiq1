@@ -10,6 +10,7 @@ import {
   isValidAudioUrl,
   transformGoogleDriveAudioUrl
 } from '../utils/mediaUtils';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 const liveAnonKey =
   (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_SUPABASE_ANON_KEY) ||
@@ -21,6 +22,22 @@ export const SUPABASE_CONFIG = {
   restBaseUrl: 'https://ixkganrxtkywypvqkqkn.supabase.co/rest/v1',
   storageBaseUrl: 'https://ixkganrxtkywypvqkqkn.supabase.co/storage/v1'
 };
+
+export const supabase: SupabaseClient = createClient(
+  SUPABASE_CONFIG.url,
+  SUPABASE_CONFIG.anonKey,
+  {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true
+    },
+    realtime: {
+      params: {
+        eventsPerSecond: 10
+      }
+    }
+  }
+);
 
 export class SupabaseService {
   private static headers = {

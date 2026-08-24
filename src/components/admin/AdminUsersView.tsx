@@ -33,7 +33,9 @@ import {
   Filter
 } from 'lucide-react';
 import { CountrySelectField } from '../CountrySelectField';
-import { SupabaseService } from '../../services/SupabaseService';
+import { SupabaseService, supabase } from '../../services/SupabaseService';
+import { userService } from '../../services/UserService';
+import { Send } from 'lucide-react';
 
 export const AdminUsersView: React.FC = () => {
   const [users, setUsers] = useState<any[]>([]);
@@ -51,13 +53,20 @@ export const AdminUsersView: React.FC = () => {
   const [userRecitations, setUserRecitations] = useState<any[]>([]);
   const [userActivityLogs, setUserActivityLogs] = useState<any[]>([]);
   const [loadingUserDetails, setLoadingUserDetails] = useState(false);
-  const [activeTab, setActiveTab] = useState<'profile' | 'recitations' | 'activity'>('profile');
+  const [activeTab, setActiveTab] = useState<'profile' | 'recitations' | 'activity' | 'notification'>('profile');
 
   const [isEditing, setIsEditing] = useState(false);
   const [editFormData, setEditFormData] = useState<Partial<UserProfile>>({});
   const [actionLoading, setActionLoading] = useState(false);
   const [suspendReason, setSuspendReason] = useState('');
   const [showSuspendPrompt, setShowSuspendPrompt] = useState(false);
+
+  // Direct User Notification Form State
+  const [directNotifTitle, setDirectNotifTitle] = useState('');
+  const [directNotifBody, setDirectNotifBody] = useState('');
+  const [isSendingDirectNotif, setIsSendingDirectNotif] = useState(false);
+  const [directNotifSuccess, setDirectNotifSuccess] = useState<string | null>(null);
+  const [directNotifError, setDirectNotifError] = useState<string | null>(null);
 
   // Audio preview state in modal
   const [playingRecId, setPlayingRecId] = useState<string | null>(null);
@@ -66,7 +75,6 @@ export const AdminUsersView: React.FC = () => {
     setLoading(true);
     try {
       const data = await adminService.getUsers();
-      // Enrich with recitations count if needed
       setUsers(data);
     } catch (e) {
       console.warn('Failed to load users:', e);
@@ -77,11 +85,76 @@ export const AdminUsersView: React.FC = () => {
 
   useEffect(() => {
     fetchUsers();
-    // Realtime polling sync interval (every 15s)
-    const interval = setInterval(() => {
-      fetchUsers();
-    }, 15000);
-    return () => clearInterval(interval);
+
+    // Supabase Realtime Subscription for instant bi-directional updates
+    const channel = supabase
+      .channel('realtime:admin_users_view')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'user_profiles' },
+        (payload) => {
+          if (payload.eventType === 'INSERT') {
+            const r: any = payload.new;
+            if (r) {
+              const mapped = {
+                id: r.id,
+                installationId: r.installation_id,
+                displayName: r.display_name || 'زائر',
+                avatarUrl: r.avatar_url,
+                country: r.country || 'العالم الإسلامي',
+                userType: r.user_type || 'LISTENER',
+                bio: r.bio || '',
+                email: r.email || null,
+                whatsapp: r.whatsapp || null,
+                isProfileCompleted: !!r.is_profile_completed,
+                isSuspended: !!r.is_suspended,
+                suspendedReason: r.suspended_reason || null,
+                lastActiveAt: r.last_active_at,
+                createdAt: r.created_at
+              };
+              setUsers((prev) => {
+                if (prev.some((u) => u.id === mapped.id || u.installationId === mapped.installationId)) {
+                  return prev.map((u) => (u.id === mapped.id || u.installationId === mapped.installationId ? mapped : u));
+                }
+                return [mapped, ...prev];
+              });
+            }
+          } else if (payload.eventType === 'UPDATE') {
+            const r: any = payload.new;
+            if (r) {
+              const mapped = {
+                id: r.id,
+                installationId: r.installation_id,
+                displayName: r.display_name || 'زائر',
+                avatarUrl: r.avatar_url,
+                country: r.country || 'العالم الإسلامي',
+                userType: r.user_type || 'LISTENER',
+                bio: r.bio || '',
+                email: r.email || null,
+                whatsapp: r.whatsapp || null,
+                isProfileCompleted: !!r.is_profile_completed,
+                isSuspended: !!r.is_suspended,
+                suspendedReason: r.suspended_reason || null,
+                lastActiveAt: r.last_active_at,
+                createdAt: r.created_at
+              };
+              setUsers((prev) => prev.map((u) => (u.id === mapped.id ? mapped : u)));
+              setSelectedUser((current: any) => (current && current.id === mapped.id ? mapped : current));
+            }
+          } else if (payload.eventType === 'DELETE') {
+            const oldRow: any = payload.old;
+            if (oldRow?.id) {
+              setUsers((prev) => prev.filter((u) => u.id !== oldRow.id));
+              setSelectedUser((current: any) => (current && current.id === oldRow.id ? null : current));
+            }
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   const handleOpenUserDetails = async (user: any) => {
@@ -178,6 +251,46 @@ export const AdminUsersView: React.FC = () => {
       alert('تم حذف المستخدم بنجاح');
     } catch (e: any) {
       alert(e?.message || 'تعذر الحذف');
+    }
+  };
+
+  const handleSendDirectNotification = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedUser || !directNotifTitle.trim() || !directNotifBody.trim()) {
+      setDirectNotifError('يرجى كتابة عنوان ونص الإشعار.');
+      return;
+    }
+
+    setIsSendingDirectNotif(true);
+    setDirectNotifError(null);
+    setDirectNotifSuccess(null);
+
+    try {
+      await adminService.sendBroadcastNotification({
+        title: directNotifTitle.trim(),
+        body: directNotifBody.trim(),
+        notificationType: 'ADMIN_ANNOUNCEMENT',
+        targetType: 'specific_user',
+        targetValue: selectedUser.installationId
+      });
+
+      await adminService.logUserActivity(
+        selectedUser.installationId,
+        'ADMIN_DIRECT_NOTIFICATION',
+        `إرسال إشعار مباشر: ${directNotifTitle.trim()}`
+      );
+
+      setDirectNotifSuccess('تم إرسال الإشعار الفوري للمستخدم بنجاح.');
+      setDirectNotifTitle('');
+      setDirectNotifBody('');
+
+      // Refresh activity logs
+      const updatedLogs = await adminService.getUserActivityLogs(selectedUser.installationId);
+      setUserActivityLogs(updatedLogs);
+    } catch (err: any) {
+      setDirectNotifError(err?.message || 'فشل إرسال الإشعار للمستخدم.');
+    } finally {
+      setIsSendingDirectNotif(false);
     }
   };
 
@@ -603,7 +716,8 @@ export const AdminUsersView: React.FC = () => {
               {[
                 { id: 'profile', label: 'الملف الشخصي والبيانات', icon: Users },
                 { id: 'recitations', label: `تلاوات المستخدم (${userRecitations.length})`, icon: Mic2 },
-                { id: 'activity', label: `سجل النشاط والتدقيق (${userActivityLogs.length})`, icon: Activity }
+                { id: 'activity', label: `سجل النشاط والتدقيق (${userActivityLogs.length})`, icon: Activity },
+                { id: 'notification', label: 'إرسال إشعار فوري', icon: Send }
               ].map((tab) => {
                 const IconComp = tab.icon;
                 return (
@@ -908,6 +1022,70 @@ export const AdminUsersView: React.FC = () => {
                       </div>
                     )}
                   </div>
+                </div>
+              )}
+
+              {/* TAB 4: Direct Notification */}
+              {activeTab === 'notification' && (
+                <div className="space-y-4 bg-[#0A1410] p-5 rounded-2xl border border-[#234235]">
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-bold text-xs text-[#55BFEA] flex items-center gap-1.5">
+                      <Send className="w-4 h-4" />
+                      <span>إرسال إشعار فوري مباشر إلى هذا المستخدم</span>
+                    </h4>
+                    <span className="text-[11px] text-[#A8C2B3]">
+                      المستلم: {selectedUser.displayName} ({selectedUser.country})
+                    </span>
+                  </div>
+
+                  {directNotifSuccess && (
+                    <div className="p-3 rounded-xl bg-emerald-950/40 border border-emerald-500/40 text-emerald-300 text-xs flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                      <span>{directNotifSuccess}</span>
+                    </div>
+                  )}
+
+                  {directNotifError && (
+                    <div className="p-3 rounded-xl bg-rose-950/40 border border-rose-500/40 text-rose-300 text-xs flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                      <span>{directNotifError}</span>
+                    </div>
+                  )}
+
+                  <form onSubmit={handleSendDirectNotification} className="space-y-4">
+                    <div>
+                      <label className="block text-xs text-[#A8C2B3] mb-1 font-bold">عنوان الإشعار *</label>
+                      <input
+                        type="text"
+                        value={directNotifTitle}
+                        onChange={(e) => setDirectNotifTitle(e.target.value)}
+                        placeholder="مثال: تنبيه بخصوص جودة التسجيل، أو رسالة شكر خاصة..."
+                        required
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-[#12231B] border border-[#234235] text-xs text-white placeholder:text-[#6E8E7E] focus:border-[#55BFEA] outline-hidden"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs text-[#A8C2B3] mb-1 font-bold">نص الإشعار والتفاصيل *</label>
+                      <textarea
+                        value={directNotifBody}
+                        onChange={(e) => setDirectNotifBody(e.target.value)}
+                        rows={4}
+                        placeholder="اكتب الرسالة التي ستصل للمستخدم في الإشعارات الفورية داخل التطبيق..."
+                        required
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-[#12231B] border border-[#234235] text-xs text-white placeholder:text-[#6E8E7E] focus:border-[#55BFEA] outline-hidden"
+                      />
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={isSendingDirectNotif}
+                      className="px-5 py-2.5 rounded-xl bg-[#1687C7] hover:bg-[#145273] text-white text-xs font-bold transition flex items-center gap-2 shadow-xs disabled:opacity-50"
+                    >
+                      <Send className="w-3.5 h-3.5" />
+                      <span>{isSendingDirectNotif ? 'جاري الإرسال المباشر...' : 'إرسال الإشعار فورياً للمستخدم'}</span>
+                    </button>
+                  </form>
                 </div>
               )}
 
