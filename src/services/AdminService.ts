@@ -14,6 +14,7 @@ import {
 } from '../types';
 import { SUPABASE_CONFIG, SupabaseService } from './SupabaseService';
 import { userService } from './UserService';
+import { transformRecitationUrl, TransformUrlOptions } from '../utils/audioUrlTemplate';
 
 export interface AdminAuthDiagnostic {
   authHttpStatus?: number;
@@ -2266,6 +2267,347 @@ class AdminServiceImpl {
 
     // Default public path representation
     return `${SUPABASE_CONFIG.storageBaseUrl}/object/public/${bucket}/${path}`;
+  }
+
+  // ============================================================================
+  // 12. RECITER CLONING & AUDIO URL TEMPLATING
+  // ============================================================================
+
+  /**
+   * Fetch all recitations specifically for a given reciter id with surah ordering
+   */
+  async getReciterRecitations(reciterId: string): Promise<any[]> {
+    if (!reciterId) return [];
+    try {
+      const url = `${SUPABASE_CONFIG.restBaseUrl}/recitations?reciter_id=eq.${encodeURIComponent(reciterId)}&order=surah_number.asc,ayah_start.asc`;
+      const res = await fetch(url, { headers: this.getAuthHeaders() });
+      if (res.ok) {
+        const rows = await res.json();
+        if (Array.isArray(rows)) {
+          return rows.map((r: any) => ({
+            id: r.id,
+            reciterId: r.reciter_id,
+            surahName: r.surah_name,
+            surahNumber: r.surah_number,
+            ayahStart: r.ayah_start,
+            ayahEnd: r.ayah_end,
+            riwayah: r.riwayah,
+            durationSeconds: r.duration_seconds,
+            audioStoragePath: r.audio_storage_path,
+            externalAudioUrl: r.external_audio_url,
+            coverImagePath: r.cover_image_path,
+            description: r.description,
+            status: r.status,
+            isStaffPick: r.is_staff_pick,
+            publishedAt: r.published_at,
+            createdAt: r.created_at
+          }));
+        }
+      }
+    } catch (e) {
+      console.warn('getReciterRecitations error:', e);
+    }
+    return [];
+  }
+
+  /**
+   * Clone a full reciter profile and all associated recitations with fresh IDs,
+   * completely independent from the original reciter.
+   */
+  async cloneReciterProfile(
+    sourceReciterId: string,
+    newDisplayName?: string,
+    newCountry?: string
+  ): Promise<{
+    success: boolean;
+    newReciterId: string;
+    newDisplayName: string;
+    copiedRecitationsCount: number;
+  }> {
+    if (!sourceReciterId) {
+      throw new Error('معرف القارئ المصدر مطلوب لإتمام عملية النسخ');
+    }
+
+    // Strategy 1: Attempt transactional Supabase RPC `clone_reciter_profile`
+    try {
+      const rpcRes = await fetch(`${SUPABASE_CONFIG.restBaseUrl}/rpc/clone_reciter_profile`, {
+        method: 'POST',
+        headers: this.getAuthHeaders(),
+        body: JSON.stringify({
+          p_source_reciter_id: sourceReciterId,
+          p_new_display_name: newDisplayName || null,
+          p_new_country: newCountry || null,
+          p_initial_status: 'PENDING'
+        })
+      });
+
+      if (rpcRes.ok) {
+        const result = await rpcRes.json();
+        if (result && result.new_reciter_id) {
+          return {
+            success: true,
+            newReciterId: result.new_reciter_id,
+            newDisplayName: result.new_display_name || newDisplayName || 'قارئ جديد',
+            copiedRecitationsCount: Number(result.copied_recitations_count) || 0
+          };
+        }
+      }
+    } catch (e) {
+      console.warn('RPC clone_reciter_profile unavailable or failed, utilizing atomic REST fallback:', e);
+    }
+
+    // Strategy 2: Robust Atomic REST fallback
+    // 1. Fetch source reciter details
+    const reciterFetchRes = await fetch(`${SUPABASE_CONFIG.restBaseUrl}/reciters?id=eq.${encodeURIComponent(sourceReciterId)}`, {
+      headers: this.getAuthHeaders()
+    });
+
+    if (!reciterFetchRes.ok) {
+      throw new Error('تعذر العثور على بيانات القارئ المصدر');
+    }
+
+    const sourceReciters = await reciterFetchRes.json();
+    if (!Array.isArray(sourceReciters) || sourceReciters.length === 0) {
+      throw new Error('القارئ المصدر غير موجود');
+    }
+
+    const src = sourceReciters[0];
+    const targetName = (newDisplayName && newDisplayName.trim()) || `${src.display_name} (نسخة)`;
+
+    // 2. Insert new reciter row
+    const createReciterRes = await fetch(`${SUPABASE_CONFIG.restBaseUrl}/reciters`, {
+      method: 'POST',
+      headers: {
+        ...this.getAuthHeaders(),
+        Prefer: 'return=representation'
+      },
+      body: JSON.stringify({
+        display_name: targetName,
+        pseudonym: src.pseudonym || null,
+        use_pseudonym: Boolean(src.use_pseudonym),
+        gender: src.gender || 'MALE',
+        country: newCountry || src.country || 'العالم الإسلامي',
+        bio: src.bio || '',
+        profile_image_path: src.profile_image_path || null,
+        banner_image_path: src.banner_image_path || null,
+        logo_image_path: src.logo_image_path || null,
+        is_verified: Boolean(src.is_verified),
+        is_featured: false,
+        is_published: false // Draft mode for safe review
+      })
+    });
+
+    if (!createReciterRes.ok) {
+      let errBody: any = null;
+      try {
+        errBody = await createReciterRes.json();
+      } catch {
+        // ignore
+      }
+      throw new Error(errBody?.message || `فشل إنشاء سجل القارئ الجديد (HTTP ${createReciterRes.status})`);
+    }
+
+    const createdReciters = await createReciterRes.json();
+    const newReciterId = createdReciters[0]?.id;
+    if (!newReciterId) {
+      throw new Error('فشل استلام معرف القارئ الجديد');
+    }
+
+    // 3. Fetch source recitations
+    let copiedCount = 0;
+    try {
+      const recitationsRes = await fetch(
+        `${SUPABASE_CONFIG.restBaseUrl}/recitations?reciter_id=eq.${encodeURIComponent(sourceReciterId)}&order=surah_number.asc,ayah_start.asc`,
+        { headers: this.getAuthHeaders() }
+      );
+
+      if (recitationsRes.ok) {
+        const sourceRecitations = await recitationsRes.json();
+        if (Array.isArray(sourceRecitations) && sourceRecitations.length > 0) {
+          // Prepare clone payload with fresh IDs and zero stats
+          const clonePayload = sourceRecitations.map((r: any) => ({
+            reciter_id: newReciterId,
+            surah_name: r.surah_name,
+            surah_number: r.surah_number,
+            ayah_start: r.ayah_start,
+            ayah_end: r.ayah_end,
+            riwayah: r.riwayah || 'حفص عن عاصم',
+            duration_seconds: r.duration_seconds || 180,
+            audio_storage_path: r.audio_storage_path,
+            external_audio_url: r.external_audio_url || null,
+            cover_image_path: r.cover_image_path || null,
+            description: r.description || '',
+            status: 'PENDING',
+            is_staff_pick: false,
+            published_at: null
+          }));
+
+          // Insert in chunks of 50 to avoid request size limits
+          const CHUNK_SIZE = 50;
+          for (let i = 0; i < clonePayload.length; i += CHUNK_SIZE) {
+            const chunk = clonePayload.slice(i, i + CHUNK_SIZE);
+            const insertChunkRes = await fetch(`${SUPABASE_CONFIG.restBaseUrl}/recitations`, {
+              method: 'POST',
+              headers: {
+                ...this.getAuthHeaders(),
+                Prefer: 'return=minimal'
+              },
+              body: JSON.stringify(chunk)
+            });
+
+            if (insertChunkRes.ok) {
+              copiedCount += chunk.length;
+            } else {
+              let errJson: any = null;
+              try {
+                errJson = await insertChunkRes.json();
+              } catch {
+                // ignore
+              }
+              console.warn(`Failed to insert recitation chunk ${i}: HTTP ${insertChunkRes.status}`, errJson);
+              // Clean up newly created reciter and partial recitations to prevent orphans (Atomic Rollback)
+              try {
+                await fetch(`${SUPABASE_CONFIG.restBaseUrl}/recitations?reciter_id=eq.${encodeURIComponent(newReciterId)}`, {
+                  method: 'DELETE',
+                  headers: this.getAuthHeaders()
+                });
+                await fetch(`${SUPABASE_CONFIG.restBaseUrl}/reciters?id=eq.${encodeURIComponent(newReciterId)}`, {
+                  method: 'DELETE',
+                  headers: this.getAuthHeaders()
+                });
+              } catch (cleanupErr) {
+                console.error('Failed to cleanup on rollback:', cleanupErr);
+              }
+              throw new Error(errJson?.message || `فشل نسخ جزء من التلاوات (HTTP ${insertChunkRes.status})، تم التراجع عن العملية.`);
+            }
+          }
+        }
+      }
+    } catch (err: any) {
+      console.warn('Error while copying recitations:', err);
+      throw err;
+    }
+
+    return {
+      success: true,
+      newReciterId,
+      newDisplayName: targetName,
+      copiedRecitationsCount: copiedCount
+    };
+  }
+
+  /**
+   * Apply an audio URL template or identifier replacement to all recitations of a reciter
+   */
+  async applyReciterAudioTemplate(
+    reciterId: string,
+    options: TransformUrlOptions
+  ): Promise<{ success: boolean; updatedCount: number }> {
+    if (!reciterId) {
+      throw new Error('معرف القارئ مطلوب لتطبيق قالب الروابط');
+    }
+
+    // Strategy 1: Attempt Supabase RPC `apply_reciter_audio_template`
+    if (options.mode === 'template' && options.urlTemplate) {
+      try {
+        const rpcRes = await fetch(`${SUPABASE_CONFIG.restBaseUrl}/rpc/apply_reciter_audio_template`, {
+          method: 'POST',
+          headers: this.getAuthHeaders(),
+          body: JSON.stringify({
+            p_reciter_id: reciterId,
+            p_url_template: options.urlTemplate,
+            p_reciter_slug: options.reciterSlug || null,
+            p_replace_from: null,
+            p_replace_to: null
+          })
+        });
+
+        if (rpcRes.ok) {
+          const resJson = await rpcRes.json();
+          if (resJson && resJson.success) {
+            return {
+              success: true,
+              updatedCount: Number(resJson.updated_recitations_count) || 0
+            };
+          }
+        }
+      } catch (e) {
+        console.warn('RPC apply_reciter_audio_template unavailable, using batch REST fallback:', e);
+      }
+    } else if (options.mode === 'replace' && options.replaceFrom) {
+      try {
+        const rpcRes = await fetch(`${SUPABASE_CONFIG.restBaseUrl}/rpc/apply_reciter_audio_template`, {
+          method: 'POST',
+          headers: this.getAuthHeaders(),
+          body: JSON.stringify({
+            p_reciter_id: reciterId,
+            p_url_template: null,
+            p_reciter_slug: null,
+            p_replace_from: options.replaceFrom,
+            p_replace_to: options.replaceTo || ''
+          })
+        });
+
+        if (rpcRes.ok) {
+          const resJson = await rpcRes.json();
+          if (resJson && resJson.success) {
+            return {
+              success: true,
+              updatedCount: Number(resJson.updated_recitations_count) || 0
+            };
+          }
+        }
+      } catch (e) {
+        console.warn('RPC apply_reciter_audio_template replace mode failed, using REST fallback:', e);
+      }
+    }
+
+    // Strategy 2: Batch REST fallback
+    const recitations = await this.getReciterRecitations(reciterId);
+    if (!recitations || recitations.length === 0) {
+      return { success: true, updatedCount: 0 };
+    }
+
+    let updatedCount = 0;
+    for (const rec of recitations) {
+      const currentUrl = rec.externalAudioUrl || rec.audioStoragePath || '';
+      const newUrl = transformRecitationUrl(currentUrl, rec.surahNumber, rec.surahName, options);
+
+      if (newUrl && newUrl !== currentUrl) {
+        try {
+          // Prepare update payload: preserve binary storage path if it was an internal Supabase Storage file
+          const updatePayload: Record<string, any> = {
+            external_audio_url: newUrl,
+            updated_at: new Date().toISOString()
+          };
+
+          // If original audio_storage_path was already an http external link, update it as well
+          if (rec.audioStoragePath && (rec.audioStoragePath.startsWith('http://') || rec.audioStoragePath.startsWith('https://'))) {
+            updatePayload.audio_storage_path = newUrl;
+          }
+
+          const patchRes = await fetch(`${SUPABASE_CONFIG.restBaseUrl}/recitations?id=eq.${encodeURIComponent(rec.id)}`, {
+            method: 'PATCH',
+            headers: {
+              ...this.getAuthHeaders(),
+              Prefer: 'return=minimal'
+            },
+            body: JSON.stringify(updatePayload)
+          });
+
+          if (patchRes.ok) {
+            updatedCount++;
+          }
+        } catch (e) {
+          console.warn(`Failed to update recitation ${rec.id}:`, e);
+        }
+      }
+    }
+
+    return {
+      success: true,
+      updatedCount
+    };
   }
 }
 
