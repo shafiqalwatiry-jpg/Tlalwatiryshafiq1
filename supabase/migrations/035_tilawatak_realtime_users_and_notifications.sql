@@ -127,12 +127,12 @@ CREATE TRIGGER trg_submission_status_notify
 
 -- 4. Transactional RPC for Complete User Deletion
 CREATE OR REPLACE FUNCTION public.admin_delete_user_complete(p_id UUID)
-RETURNS JSON AS $$
+RETURNS JSONB AS $$
 DECLARE
     v_install_id TEXT;
     v_name TEXT;
 BEGIN
-    IF NOT public.is_admin() THEN
+    IF NOT (public.is_admin() OR auth.role() = 'service_role') THEN
         RAISE EXCEPTION 'Access denied. Administrator privilege required.';
     END IF;
 
@@ -142,7 +142,7 @@ BEGIN
     WHERE id = p_id;
 
     IF NOT FOUND THEN
-        RETURN json_build_object('success', FALSE, 'message', 'المستخدم غير موجود');
+        RETURN jsonb_build_object('success', FALSE, 'message', 'المستخدم غير موجود');
     END IF;
 
     -- Delete associated notifications for this installation
@@ -163,13 +163,13 @@ BEGIN
         );
     END IF;
 
-    RETURN json_build_object('success', TRUE, 'deleted_id', p_id);
+    RETURN jsonb_build_object('success', TRUE, 'deleted_id', p_id);
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
 
 GRANT EXECUTE ON FUNCTION public.admin_delete_user_complete(UUID) TO authenticated, service_role;
 
--- 5. Broadcast Notification RPC Refinement
+-- 5. Broadcast Notification RPC Refinement (Preserves JSONB return type to prevent error 42P13)
 CREATE OR REPLACE FUNCTION public.admin_send_broadcast(
     p_title TEXT,
     p_body TEXT,
@@ -177,11 +177,11 @@ CREATE OR REPLACE FUNCTION public.admin_send_broadcast(
     p_target_type TEXT DEFAULT 'all',
     p_target_value TEXT DEFAULT NULL
 )
-RETURNS JSON AS $$
+RETURNS JSONB AS $$
 DECLARE
     v_dispatched INTEGER := 0;
 BEGIN
-    IF NOT public.is_admin() THEN
+    IF NOT (public.is_admin() OR auth.role() = 'service_role') THEN
         RAISE EXCEPTION 'Access denied. Administrator privilege required.';
     END IF;
 
@@ -202,38 +202,46 @@ BEGIN
         NOW()
     FROM public.user_profiles up
     WHERE 
-        (p_target_type = 'all')
-        OR (p_target_type = 'country' AND up.country = p_target_value)
-        OR (p_target_type = 'user_type' AND up.user_type = p_target_value)
-        OR (p_target_type = 'incomplete_profile' AND up.is_profile_completed = FALSE)
-        OR (p_target_type = 'specific_user' AND (up.id::TEXT = p_target_value OR up.installation_id = p_target_value));
+        up.installation_id IS NOT NULL AND TRIM(up.installation_id) <> ''
+        AND (
+            (p_target_type = 'all')
+            OR (p_target_type = 'country' AND (up.country = p_target_value OR p_target_value IS NULL))
+            OR (p_target_type = 'user_type' AND (up.user_type = p_target_value OR p_target_value IS NULL))
+            OR (p_target_type = 'incomplete_profile' AND up.is_profile_completed = FALSE)
+            OR (p_target_type = 'specific_user' AND (up.id::TEXT = p_target_value OR up.installation_id = p_target_value))
+        );
 
     GET DIAGNOSTICS v_dispatched = ROW_COUNT;
 
     -- Record in broadcast audit log if table exists
     IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'broadcast_notifications') THEN
-        INSERT INTO public.broadcast_notifications (
-            title,
-            body,
-            target_audience,
-            sent_by,
-            sent_at
-        ) VALUES (
-            p_title,
-            p_body,
-            p_target_type || CASE WHEN p_target_value IS NOT NULL THEN ':' || p_target_value ELSE '' END,
-            auth.uid(),
-            NOW()
-        );
+        BEGIN
+            INSERT INTO public.broadcast_notifications (
+                title,
+                body,
+                target_audience,
+                sent_by,
+                sent_at
+            ) VALUES (
+                p_title,
+                p_body,
+                p_target_type || CASE WHEN p_target_value IS NOT NULL THEN ':' || p_target_value ELSE '' END,
+                auth.uid(),
+                NOW()
+            );
+        EXCEPTION WHEN OTHERS THEN
+            NULL;
+        END;
     END IF;
 
-    RETURN json_build_object(
+    RETURN jsonb_build_object(
         'success', TRUE,
         'dispatched_count', v_dispatched
     );
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
 
+REVOKE ALL ON FUNCTION public.admin_send_broadcast(TEXT, TEXT, TEXT, TEXT, TEXT) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.admin_send_broadcast(TEXT, TEXT, TEXT, TEXT, TEXT) TO authenticated, service_role;
 
 -- 6. Refresh RLS Policies for user_profiles and user_notifications
