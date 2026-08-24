@@ -24,6 +24,7 @@ import { RecitationSubmission } from '../types';
 import { SupabaseService } from '../services/SupabaseService';
 import { userService } from '../services/UserService';
 import { isValidAudioUrl } from '../utils/mediaUtils';
+import { UnifiedImageInput } from './common/UnifiedImageInput';
 
 interface SubmitRecitationViewProps {
   onSubmit: (data: Omit<RecitationSubmission, 'id' | 'submittedAt' | 'status'>) => Promise<RecitationSubmission>;
@@ -803,16 +804,14 @@ export const SubmitRecitationView: React.FC<SubmitRecitationViewProps> = ({
                 />
               </div>
 
-              <div>
-                <label className="block text-[11px] font-semibold text-[#7A847E] mb-1">
-                  رابط صورة الغلاف أو الملف (اختياري)
-                </label>
-                <input
-                  type="url"
+              <div className="sm:col-span-2 pt-2">
+                <UnifiedImageInput
+                  label="صورة الغلاف أو الملف الشخصي (اختياري)"
                   value={externalImageUrl}
-                  onChange={(e) => setExternalImageUrl(e.target.value)}
-                  placeholder="https://..."
-                  className="w-full px-3 py-1.5 rounded-lg bg-[#FAFBF9] border border-[#E2E5DF] text-xs text-[#102A20]"
+                  onChange={setExternalImageUrl}
+                  type="avatar"
+                  name={displayName || 'قارئ'}
+                  bucket="profile-images"
                 />
               </div>
             </div>

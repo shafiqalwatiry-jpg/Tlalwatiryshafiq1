@@ -317,6 +317,7 @@ export default function App() {
       {isPlayerExpanded && (
         <FullPlayerModal
           playerState={playerState}
+          reciters={reciters}
           onClose={() => setIsPlayerExpanded(false)}
           onTogglePlay={handleTogglePlay}
           onNext={handleNext}

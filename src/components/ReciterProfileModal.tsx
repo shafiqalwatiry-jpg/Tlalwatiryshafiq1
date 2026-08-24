@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Reciter, Recitation, PlayerState, ReciterHonor } from '../types';
-import { X, CheckCircle2, Globe, Headphones, Heart, BookOpen, Share2, Award, Sparkles } from 'lucide-react';
+import { X, Globe, Headphones, Heart, BookOpen, Share2, Award, Sparkles } from 'lucide-react';
 import { RecitationCard } from './RecitationCard';
+import { ReciterAvatar } from './ReciterAvatar';
 import { honorRepository } from '../services/Repositories';
 
 interface ReciterProfileModalProps {
@@ -92,19 +93,14 @@ export const ReciterProfileModal: React.FC<ReciterProfileModalProps> = ({
           </button>
 
           <div className="relative z-10 flex flex-col sm:flex-row items-center sm:items-start gap-4 pt-2">
-            <div className="relative">
-              <img
-                src={reciter.avatarUrl}
-                alt={reciter.displayName}
-                referrerPolicy="no-referrer"
-                className="w-20 h-20 sm:w-24 sm:h-24 rounded-full object-cover border-4 border-white/20 shadow-md"
-              />
-              {reciter.verified && (
-                <span className="absolute bottom-0 right-0 bg-white rounded-full p-1 shadow-sm" title="قارئ موثق ومعتمد">
-                  <CheckCircle2 className="w-5 h-5 text-[#315F4A] fill-[#FAFBF9]" />
-                </span>
-              )}
-            </div>
+            <ReciterAvatar
+              name={reciter.displayName}
+              imageUrl={reciter.avatarUrl}
+              size="xl"
+              isVerified={reciter.verified}
+              showVerifiedBadge={true}
+              className="border-4 border-white/20 rounded-full shadow-md"
+            />
 
             <div className="text-center sm:text-right flex-1">
               <div className="flex items-center justify-center sm:justify-start gap-2 flex-wrap">

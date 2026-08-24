@@ -1,6 +1,7 @@
 import React from 'react';
 import { Reciter } from '../types';
-import { CheckCircle2, Globe, Headphones, Heart, BookOpen, Sparkles } from 'lucide-react';
+import { Globe, Headphones, Heart, BookOpen, Sparkles } from 'lucide-react';
+import { ReciterAvatar } from './ReciterAvatar';
 
 interface ReciterCardProps {
   reciter: Reciter;
@@ -16,19 +17,13 @@ export const ReciterCard: React.FC<ReciterCardProps> = ({ reciter, onClick }) =>
       <div>
         {/* Reciter Avatar & Verification */}
         <div className="flex items-start gap-3.5">
-          <div className="relative">
-            <img
-              src={reciter.avatarUrl}
-              alt={reciter.displayName}
-              referrerPolicy="no-referrer"
-              className="w-14 h-14 rounded-full object-cover border-2 border-[#D8E8F2] group-hover:border-[#1687C7] transition-colors"
-            />
-            {reciter.verified && (
-              <span className="absolute -bottom-1 -right-1 bg-white rounded-full p-0.5 shadow-xs" title="قارئ موثق ومعتمد">
-                <CheckCircle2 className="w-4 h-4 text-[#1687C7] fill-[#E7F7FD]" />
-              </span>
-            )}
-          </div>
+          <ReciterAvatar
+            name={reciter.displayName}
+            imageUrl={reciter.avatarUrl}
+            size="lg"
+            isVerified={reciter.verified}
+            showVerifiedBadge={true}
+          />
 
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1.5 flex-wrap">

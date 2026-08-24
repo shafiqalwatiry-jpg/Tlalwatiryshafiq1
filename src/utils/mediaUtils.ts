@@ -6,10 +6,10 @@ const STORAGE_BASE_URL = 'https://ixkganrxtkywypvqkqkn.supabase.co/storage/v1';
 export function normalizeImageUrl(
   imagePath?: string | null,
   defaultBucket: string = 'profile-images',
-  fallbackPlaceholder?: string
+  fallbackPlaceholder: string = ''
 ): string {
   if (!imagePath || !imagePath.trim()) {
-    return fallbackPlaceholder || 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400&fit=crop&crop=face';
+    return fallbackPlaceholder;
   }
 
   const raw = imagePath.trim();

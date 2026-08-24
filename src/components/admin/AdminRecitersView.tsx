@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { adminService } from '../../services/AdminService';
 import { SupabaseService } from '../../services/SupabaseService';
 import { ALL_WORLD_COUNTRIES } from '../../data/countries';
+import { UnifiedImageInput } from '../common/UnifiedImageInput';
+import { ReciterAvatar } from '../ReciterAvatar';
 import {
   Users,
   UserPlus,
@@ -15,9 +17,7 @@ import {
   AlertCircle,
   Eye,
   EyeOff,
-  Star,
-  Upload,
-  Image as ImageIcon
+  Star
 } from 'lucide-react';
 
 export function AdminRecitersView() {
@@ -42,9 +42,6 @@ export function AdminRecitersView() {
   const [isPublished, setIsPublished] = useState(true);
 
   const [isSaving, setIsSaving] = useState(false);
-  const [isUploadingProfile, setIsUploadingProfile] = useState(false);
-  const [isUploadingBanner, setIsUploadingBanner] = useState(false);
-  const [isUploadingLogo, setIsUploadingLogo] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
   const loadReciters = async () => {
@@ -97,33 +94,6 @@ export function AdminRecitersView() {
     setIsPublished(reciter.is_published ?? true);
     setFormError(null);
     setIsModalOpen(true);
-  };
-
-  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, type: 'profile' | 'banner' | 'logo') => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (type === 'profile') setIsUploadingProfile(true);
-    else if (type === 'banner') setIsUploadingBanner(true);
-    else setIsUploadingLogo(true);
-    setFormError(null);
-
-    try {
-      const result = await SupabaseService.uploadImage(file, 'profile-images');
-      if (result && result.storagePath) {
-        if (type === 'profile') setProfileImagePath(result.storagePath);
-        else if (type === 'banner') setBannerImagePath(result.storagePath);
-        else setLogoImagePath(result.storagePath);
-      } else {
-        setFormError('فشل رفع الصورة إلى السحابة، يرجى المحاولة مرة أخرى');
-      }
-    } catch (err) {
-      setFormError('حدث خطأ أثناء رفع الصورة');
-    } finally {
-      if (type === 'profile') setIsUploadingProfile(false);
-      else if (type === 'banner') setIsUploadingBanner(false);
-      else setIsUploadingLogo(false);
-    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -310,17 +280,12 @@ export function AdminRecitersView() {
               <div className="space-y-3">
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex items-center gap-3">
-                    {reciter.profile_image_path ? (
-                      <img
-                        src={reciter.profile_image_path}
-                        alt={reciter.display_name}
-                        className="w-12 h-12 rounded-xl object-cover border border-[#2B5742]"
-                      />
-                    ) : (
-                      <div className="w-12 h-12 rounded-xl bg-[#1A3328] border border-[#2B5742] flex items-center justify-center text-[#4B8569]">
-                        <Users className="w-6 h-6" />
-                      </div>
-                    )}
+                    <ReciterAvatar
+                      name={reciter.display_name}
+                      imageUrl={reciter.profile_image_path}
+                      size="md"
+                      shape="rounded"
+                    />
 
                     <div>
                       <div className="flex items-center gap-1.5">
@@ -522,53 +487,35 @@ export function AdminRecitersView() {
                 </div>
               </div>
 
-              <div className="space-y-1">
+              <div className="space-y-3 pt-1 border-t border-[#1F372C]/60">
                 <label className="block font-semibold text-[#A8C2B3]">صور الهوية البصرية (الملف الشخصي، البنر، والشعار)</label>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
-                  {/* Profile Image */}
-                  <div className="space-y-1 bg-[#0D1813] p-2.5 rounded-xl border border-[#234235]">
-                    <span className="block text-[11px] text-[#A8C2B3]">الصورة الشخصية</span>
-                    <div className="flex items-center gap-2">
-                      {profileImagePath && (
-                        <img src={SupabaseService.resolveImageUrl(profileImagePath, 'profile-images')} alt="Avatar" className="w-9 h-9 rounded-lg object-cover border border-[#2B5742]" />
-                      )}
-                      <label className="flex-1 cursor-pointer bg-[#1A3328] hover:bg-[#224435] text-white py-1.5 px-2 rounded-lg text-center text-[10px] font-bold flex items-center justify-center gap-1 transition">
-                        <Upload className="w-3 h-3" />
-                        <span>{isUploadingProfile ? '...' : 'رفع'}</span>
-                        <input type="file" accept="image/*" onChange={(e) => handleImageUpload(e, 'profile')} className="hidden" />
-                      </label>
-                    </div>
-                  </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <UnifiedImageInput
+                    label="الصورة الشخصية"
+                    value={profileImagePath}
+                    onChange={setProfileImagePath}
+                    type="avatar"
+                    name={displayName || 'قارئ'}
+                    bucket="profile-images"
+                  />
 
-                  {/* Banner Image */}
-                  <div className="space-y-1 bg-[#0D1813] p-2.5 rounded-xl border border-[#234235]">
-                    <span className="block text-[11px] text-[#A8C2B3]">صورة البنر (الغلاف)</span>
-                    <div className="flex items-center gap-2">
-                      {bannerImagePath && (
-                        <img src={SupabaseService.resolveImageUrl(bannerImagePath, 'profile-images')} alt="Banner" className="w-9 h-9 rounded-lg object-cover border border-[#2B5742]" />
-                      )}
-                      <label className="flex-1 cursor-pointer bg-[#1A3328] hover:bg-[#224435] text-white py-1.5 px-2 rounded-lg text-center text-[10px] font-bold flex items-center justify-center gap-1 transition">
-                        <Upload className="w-3 h-3" />
-                        <span>{isUploadingBanner ? '...' : 'رفع'}</span>
-                        <input type="file" accept="image/*" onChange={(e) => handleImageUpload(e, 'banner')} className="hidden" />
-                      </label>
-                    </div>
-                  </div>
+                  <UnifiedImageInput
+                    label="صورة البنر (الغلاف)"
+                    value={bannerImagePath}
+                    onChange={setBannerImagePath}
+                    type="banner"
+                    name={displayName || 'قارئ'}
+                    bucket="profile-images"
+                  />
 
-                  {/* Logo Image */}
-                  <div className="space-y-1 bg-[#0D1813] p-2.5 rounded-xl border border-[#234235]">
-                    <span className="block text-[11px] text-[#A8C2B3]">شعار القارئ (Logo)</span>
-                    <div className="flex items-center gap-2">
-                      {logoImagePath && (
-                        <img src={SupabaseService.resolveImageUrl(logoImagePath, 'profile-images')} alt="Logo" className="w-9 h-9 rounded-lg object-contain bg-black/40 border border-[#2B5742]" />
-                      )}
-                      <label className="flex-1 cursor-pointer bg-[#1A3328] hover:bg-[#224435] text-white py-1.5 px-2 rounded-lg text-center text-[10px] font-bold flex items-center justify-center gap-1 transition">
-                        <Upload className="w-3 h-3" />
-                        <span>{isUploadingLogo ? '...' : 'رفع'}</span>
-                        <input type="file" accept="image/*" onChange={(e) => handleImageUpload(e, 'logo')} className="hidden" />
-                      </label>
-                    </div>
-                  </div>
+                  <UnifiedImageInput
+                    label="شعار القارئ (Logo)"
+                    value={logoImagePath}
+                    onChange={setLogoImagePath}
+                    type="logo"
+                    name={displayName || 'قارئ'}
+                    bucket="profile-images"
+                  />
                 </div>
               </div>
 

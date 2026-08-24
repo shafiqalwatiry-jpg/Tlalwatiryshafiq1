@@ -2,6 +2,7 @@ import React from 'react';
 import { PlayerState, Recitation } from '../types';
 import { Play, Pause, SkipForward, SkipBack, Heart, Maximize2, X } from 'lucide-react';
 import { AudioService } from '../services/AudioService';
+import { ReciterAvatar } from './ReciterAvatar';
 
 interface PlayerBarProps {
   playerState: PlayerState;
@@ -47,15 +48,16 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
             onClick={onExpand}
             className="flex items-center gap-3 cursor-pointer flex-1 min-w-0"
           >
-            <div className="relative w-11 h-11 rounded-2xl overflow-hidden shrink-0 border border-white/20">
-              <img
-                src={current.reciterAvatar}
-                alt={current.reciterName}
-                referrerPolicy="no-referrer"
-                className="w-full h-full object-cover"
+            <div className="relative w-11 h-11 shrink-0">
+              <ReciterAvatar
+                name={current.reciterName}
+                imageUrl={current.reciterAvatar}
+                size="md"
+                shape="rounded"
+                className="w-11 h-11"
               />
               {playerState.isPlaying && (
-                <div className="absolute inset-0 bg-[#1687C7]/60 flex items-center justify-center gap-0.5">
+                <div className="absolute inset-0 bg-[#1687C7]/60 rounded-2xl flex items-center justify-center gap-0.5 pointer-events-none">
                   <div className="w-0.5 bg-white wave-bar-1" />
                   <div className="w-0.5 bg-white wave-bar-3" />
                   <div className="w-0.5 bg-white wave-bar-5" />
