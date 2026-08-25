@@ -28,7 +28,7 @@ val configuredSupabaseUrl = localProperties.getProperty("SUPABASE_URL")
 val configuredSupabaseAnonKey = localProperties.getProperty("SUPABASE_ANON_KEY")
     ?: System.getenv("SUPABASE_ANON_KEY")
     ?: System.getenv("VITE_SUPABASE_ANON_KEY")
-    ?: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml4a2dhbnJ4dGt5d3lwdnFrcWtuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY3MjM3OTYsImV4cCI6MjEwMjI5OTc5Nn0.SPHzwpfZpCpo6vrbKZ5wjiPlQE9e7UTMEbPcZGZ7gRQ"
+    ?: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml4a2dhbnJ4dGt5d3lwdnFrcWtuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY3MjM3OTYsImV4cCI6MjEwMjI5OTc5Nn0.SPHzwpfZpCpo6vrbKZ5wjiP[...]"
 
 android {
     namespace = "com.tilawatak.lilalam"
@@ -106,4 +106,7 @@ dependencies {
 
     // Biometric Authentication for Admin Panel
     implementation("androidx.biometric:biometric:1.1.0")
+
+    // AppCompat for Activity subclass compatibility (required for AppCompatActivity)
+    implementation("androidx.appcompat:appcompat:1.6.1")
 }
