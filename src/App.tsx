@@ -11,6 +11,7 @@ import {
   recitationRepository,
   submissionRepository
 } from './services/Repositories';
+import { syncEngine } from './services/SyncEngine';
 import { audioService } from './services/AudioService';
 import { Header } from './components/Header';
 import { BottomNav } from './components/BottomNav';
@@ -44,9 +45,9 @@ export default function App() {
     } catch {}
     return 'home';
   });
-  const [reciters, setReciters] = useState<Reciter[]>([]);
-  const [recitations, setRecitations] = useState<Recitation[]>([]);
-  const [submissions, setSubmissions] = useState<RecitationSubmission[]>([]);
+  const [reciters, setReciters] = useState<Reciter[]>(() => syncEngine.getReciters());
+  const [recitations, setRecitations] = useState<Recitation[]>(() => syncEngine.getRecitations());
+  const [submissions, setSubmissions] = useState<RecitationSubmission[]>(() => syncEngine.getSubmissions());
 
   // Sync tab with sessionStorage
   useEffect(() => {
@@ -78,7 +79,7 @@ export default function App() {
   // Global Player State
   const [playerState, setPlayerState] = useState<PlayerState>(audioService.getState());
 
-  // Load initial data from Clean Architecture Repositories
+  // Load and refresh data in background via Repositories
   const loadData = async () => {
     try {
       const [allReciters, allRecitations, allSubmissions] = await Promise.all([
@@ -107,9 +108,14 @@ export default function App() {
       setReciters(updatedReciters);
     });
 
+    const unsubSubmissions = submissionRepository.getSubmissionsStream((updatedSubs) => {
+      setSubmissions(updatedSubs);
+    });
+
     return () => {
       unsubRecitations();
       unsubReciters();
+      unsubSubmissions();
     };
   }, []);
 

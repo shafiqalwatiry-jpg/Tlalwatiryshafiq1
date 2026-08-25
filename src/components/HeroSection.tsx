@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Radio, BookOpen, Sparkles, Megaphone, Trophy, ChevronRight, ChevronLeft, Calendar, Clock, Award } from 'lucide-react';
 import { Announcement, Competition } from '../types';
-import { adminService } from '../services/AdminService';
+import { announcementRepository, competitionRepository } from '../services/Repositories';
 
 interface HeroSectionProps {
   onExploreClick: () => void;
@@ -18,28 +18,32 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
   const [compIndex, setCompIndex] = useState(0);
 
   useEffect(() => {
-    let isMounted = true;
-    const fetchData = async () => {
+    // Initial fetch from cache
+    const loadInitial = async () => {
       try {
         const [annoList, compList] = await Promise.all([
-          adminService.getAnnouncements(),
-          adminService.getCompetitions()
+          announcementRepository.getPublishedAnnouncements(),
+          competitionRepository.getPublishedCompetitions()
         ]);
-        if (isMounted) {
-          const publishedAnnos = annoList.filter((a) => a.isPublished);
-          const publishedComps = compList.filter((c) => c.isPublished);
-
-          setAnnouncements(publishedAnnos);
-          setCompetitions(publishedComps);
-        }
+        setAnnouncements(annoList.filter((a) => a.isPublished));
+        setCompetitions(compList.filter((c) => c.isPublished));
       } catch (e) {
         console.warn('Hero section fetch fallback:', e);
       }
     };
+    loadInitial();
 
-    fetchData();
+    // Stream subscriptions for realtime & background sync
+    const unsubAnnos = announcementRepository.getAnnouncementsStream((list) => {
+      setAnnouncements(list.filter((a) => a.isPublished));
+    });
+    const unsubComps = competitionRepository.getCompetitionsStream((list) => {
+      setCompetitions(list.filter((c) => c.isPublished));
+    });
+
     return () => {
-      isMounted = false;
+      unsubAnnos();
+      unsubComps();
     };
   }, []);
 

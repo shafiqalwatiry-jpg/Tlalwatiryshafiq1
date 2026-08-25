@@ -31,7 +31,7 @@ export class UserService {
       this.loadNotifications();
       this.ensureVisitorRegistered();
       this.initRealtimeSubscriptions();
-      this.startFallbackPolling();
+      this.setupLifecycleSync();
     }
   }
 
@@ -203,12 +203,16 @@ export class UserService {
     }
   }
 
-  private startFallbackPolling() {
-    if (this.fallbackSyncTimer) return;
-    this.fallbackSyncTimer = setInterval(() => {
-      this.syncWithRemoteProfile().catch(() => {});
-      this.fetchRemoteNotifications().catch(() => {});
-    }, 20000);
+  private setupLifecycleSync() {
+    if (typeof window === 'undefined') return;
+    const onResume = () => {
+      if (document.visibilityState === 'visible') {
+        this.syncWithRemoteProfile().catch(() => {});
+        this.fetchRemoteNotifications().catch(() => {});
+      }
+    };
+    window.addEventListener('visibilitychange', onResume);
+    window.addEventListener('online', onResume);
   }
 
   public async ensureVisitorRegistered(): Promise<void> {

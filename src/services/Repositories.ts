@@ -77,6 +77,7 @@ export interface ISubmissionRepository {
     submission: Omit<RecitationSubmission, 'id' | 'submittedAt' | 'status'>
   ): Promise<RecitationSubmission>;
   getUserSubmissions(): Promise<RecitationSubmission[]>;
+  getSubmissionsStream(onUpdate?: (submissions: RecitationSubmission[]) => void): () => void;
 }
 
 export interface ICompetitionRepository {
@@ -312,6 +313,11 @@ class SyncSubmissionRepository implements ISubmissionRepository {
 
     syncEngine.addSubmissionOptimistic(newSubmission);
     return newSubmission;
+  }
+
+  getSubmissionsStream(onUpdate?: (submissions: RecitationSubmission[]) => void): () => void {
+    if (!onUpdate) return () => {};
+    return syncEngine.subscribeSubmissions(onUpdate);
   }
 }
 

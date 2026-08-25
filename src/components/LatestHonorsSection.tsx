@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { adminService } from '../services/AdminService';
+import { honorRepository } from '../services/Repositories';
+import { ReciterHonor } from '../types';
 import { Award, Sparkles, CheckCircle2, User, ChevronLeft } from 'lucide-react';
 
 interface LatestHonorsSectionProps {
@@ -9,25 +10,21 @@ interface LatestHonorsSectionProps {
 export const LatestHonorsSection: React.FC<LatestHonorsSectionProps> = ({
   onSelectReciter
 }) => {
-  const [honors, setHonors] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [honors, setHonors] = useState<ReciterHonor[]>([]);
 
   useEffect(() => {
-    const fetchHonors = async () => {
-      try {
-        const list = await adminService.getReciterHonors();
-        setHonors(list.slice(0, 4));
-      } catch {
-        setHonors([]);
-      } finally {
-        setLoading(false);
-      }
-    };
+    honorRepository.getReciterHonors().then((list) => {
+      setHonors(list.slice(0, 4));
+    });
 
-    fetchHonors();
+    const unsubscribe = honorRepository.getHonorsStream((list) => {
+      setHonors(list.slice(0, 4));
+    });
+
+    return () => unsubscribe();
   }, []);
 
-  if (loading || honors.length === 0) return null;
+  if (honors.length === 0) return null;
 
   return (
     <div className="space-y-3 font-tajawal">

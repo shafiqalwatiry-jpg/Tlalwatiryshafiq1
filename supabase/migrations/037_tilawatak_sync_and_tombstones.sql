@@ -9,7 +9,60 @@
 -- 5. Configures RLS policies granting public read access to sync tombstones.
 -- ============================================================================
 
--- 1. Create sync_tombstones table
+-- 1. Ensure public_recitations_view includes updated_at, listen_count, and like_count
+DROP VIEW IF EXISTS public.public_recitations_view CASCADE;
+CREATE OR REPLACE VIEW public.public_recitations_view AS
+SELECT
+    r.id,
+    r.reciter_id,
+    CASE
+        WHEN rc.use_pseudonym = TRUE AND rc.pseudonym IS NOT NULL AND TRIM(rc.pseudonym) <> '' THEN rc.pseudonym
+        ELSE rc.display_name
+    END AS reciter_name,
+    rc.profile_image_path AS reciter_avatar,
+    rc.country AS reciter_country,
+    r.surah_name,
+    r.surah_number,
+    r.ayah_start,
+    r.ayah_end,
+    CASE
+        WHEN r.ayah_start = 1 AND (
+            (r.surah_number = 1 AND r.ayah_end = 7) OR
+            (r.surah_number = 108 AND r.ayah_end = 3) OR
+            (r.ayah_end <= r.ayah_start)
+        ) THEN 'كاملة'
+        ELSE 'الآيات ' || r.ayah_start || ' - ' || r.ayah_end
+    END AS ayah_range,
+    r.riwayah,
+    r.duration_seconds,
+    r.audio_storage_path,
+    r.external_audio_url,
+    r.cover_image_path,
+    r.description,
+    r.status,
+    r.is_staff_pick,
+    r.published_at,
+    r.created_at,
+    COALESCE(r.updated_at, r.created_at) AS updated_at,
+    COALESCE(ls.listen_count, 0)::BIGINT AS listen_count,
+    COALESCE(lk.like_count, 0)::BIGINT AS like_count
+FROM public.recitations r
+JOIN public.reciters rc ON r.reciter_id = rc.id
+LEFT JOIN (
+    SELECT recitation_id, COUNT(*) AS listen_count
+    FROM public.listen_events
+    GROUP BY recitation_id
+) ls ON r.id = ls.recitation_id
+LEFT JOIN (
+    SELECT recitation_id, COUNT(*) AS like_count
+    FROM public.likes
+    GROUP BY recitation_id
+) lk ON r.id = lk.recitation_id
+WHERE r.status = 'APPROVED' AND rc.is_published = TRUE;
+
+GRANT SELECT ON public.public_recitations_view TO anon, authenticated, service_role;
+
+-- 2. Create sync_tombstones table
 CREATE TABLE IF NOT EXISTS public.sync_tombstones (
     id BIGSERIAL PRIMARY KEY,
     table_name TEXT NOT NULL,
@@ -20,6 +73,9 @@ CREATE TABLE IF NOT EXISTS public.sync_tombstones (
 -- Index for high-speed timestamp-based sync filtering
 CREATE INDEX IF NOT EXISTS idx_sync_tombstones_lookup
     ON public.sync_tombstones(table_name, deleted_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_sync_tombstones_deleted_at
+    ON public.sync_tombstones(deleted_at DESC);
 
 -- 2. Trigger function to record deleted items in sync_tombstones
 CREATE OR REPLACE FUNCTION public.trg_log_sync_tombstone()
@@ -177,10 +233,30 @@ BEGIN
         FROM public.announcements a
         WHERE a.is_published = TRUE;
 
-        -- Honors
-        SELECT COALESCE(jsonb_agg(to_jsonb(h)), '[]'::jsonb)
+        -- Honors (with joined reciter and reward details)
+        SELECT COALESCE(jsonb_agg(jsonb_build_object(
+            'id', h.id,
+            'reciter_id', h.reciter_id,
+            'reciter_name', COALESCE(rc.display_name, ''),
+            'reciter_avatar', rc.profile_image_path,
+            'reward_id', h.reward_id,
+            'citation_note', h.citation_note,
+            'awarded_at', h.awarded_at,
+            'reward', jsonb_build_object(
+                'id', rd.id,
+                'code', rd.code,
+                'title', rd.title,
+                'description', rd.description,
+                'category', rd.category,
+                'badge_icon_path', rd.badge_icon_path,
+                'is_active', rd.is_active,
+                'created_at', rd.created_at
+            )
+        )), '[]'::jsonb)
         INTO v_honors
-        FROM public.reciter_honors h;
+        FROM public.reciter_honors h
+        LEFT JOIN public.reciters rc ON h.reciter_id = rc.id
+        LEFT JOIN public.reward_definitions rd ON h.reward_id = rd.id;
 
         -- User Notifications (if installation_id provided)
         IF p_installation_id IS NOT NULL THEN
@@ -215,10 +291,30 @@ BEGIN
         FROM public.announcements a
         WHERE a.is_published = TRUE AND a.updated_at > p_last_sync_timestamp;
 
-        SELECT COALESCE(jsonb_agg(to_jsonb(h)), '[]'::jsonb)
+        SELECT COALESCE(jsonb_agg(jsonb_build_object(
+            'id', h.id,
+            'reciter_id', h.reciter_id,
+            'reciter_name', COALESCE(rc.display_name, ''),
+            'reciter_avatar', rc.profile_image_path,
+            'reward_id', h.reward_id,
+            'citation_note', h.citation_note,
+            'awarded_at', h.awarded_at,
+            'reward', jsonb_build_object(
+                'id', rd.id,
+                'code', rd.code,
+                'title', rd.title,
+                'description', rd.description,
+                'category', rd.category,
+                'badge_icon_path', rd.badge_icon_path,
+                'is_active', rd.is_active,
+                'created_at', rd.created_at
+            )
+        )), '[]'::jsonb)
         INTO v_honors
         FROM public.reciter_honors h
-        WHERE h.created_at > p_last_sync_timestamp;
+        LEFT JOIN public.reciters rc ON h.reciter_id = rc.id
+        LEFT JOIN public.reward_definitions rd ON h.reward_id = rd.id
+        WHERE h.awarded_at > p_last_sync_timestamp;
 
         IF p_installation_id IS NOT NULL THEN
             SELECT COALESCE(jsonb_agg(to_jsonb(n)), '[]'::jsonb)
@@ -229,15 +325,43 @@ BEGIN
             v_notifications := '[]'::jsonb;
         END IF;
 
-        -- Collect all tombstones deleted after p_last_sync_timestamp
-        SELECT COALESCE(jsonb_agg(jsonb_build_object(
-            'table', t.table_name,
-            'id', t.record_id,
-            'deleted_at', t.deleted_at
-        )), '[]'::jsonb)
+        -- Collect all tombstones: deleted items + items updated to unpublished/rejected
+        SELECT COALESCE(jsonb_agg(t_union.item), '[]'::jsonb)
         INTO v_tombstones
-        FROM public.sync_tombstones t
-        WHERE t.deleted_at > p_last_sync_timestamp;
+        FROM (
+            -- Explicit deletions from sync_tombstones
+            SELECT jsonb_build_object(
+                'table', t.table_name,
+                'id', t.record_id,
+                'deleted_at', t.deleted_at
+            ) AS item
+            FROM public.sync_tombstones t
+            WHERE t.deleted_at > p_last_sync_timestamp
+
+            UNION ALL
+
+            -- Reciters that were unpublished since last sync
+            SELECT jsonb_build_object(
+                'table', 'reciters',
+                'id', r_unpub.id::TEXT,
+                'deleted_at', r_unpub.updated_at
+            ) AS item
+            FROM public.reciters r_unpub
+            WHERE r_unpub.is_published = FALSE AND r_unpub.updated_at > p_last_sync_timestamp
+
+            UNION ALL
+
+            -- Recitations that were rejected/unapproved or reciter unpublished since last sync
+            SELECT jsonb_build_object(
+                'table', 'recitations',
+                'id', rc_unapp.id::TEXT,
+                'deleted_at', rc_unapp.updated_at
+            ) AS item
+            FROM public.recitations rc_unapp
+            JOIN public.reciters rc_parent ON rc_unapp.reciter_id = rc_parent.id
+            WHERE (rc_unapp.status <> 'APPROVED' OR rc_parent.is_published = FALSE)
+              AND rc_unapp.updated_at > p_last_sync_timestamp
+        ) t_union;
     END IF;
 
     RETURN jsonb_build_object(

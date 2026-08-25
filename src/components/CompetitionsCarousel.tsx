@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Competition } from '../types';
-import { adminService } from '../services/AdminService';
+import { competitionRepository } from '../services/Repositories';
 import {
   Trophy,
   Calendar,
@@ -19,26 +19,21 @@ export const CompetitionsCarousel: React.FC<CompetitionsCarouselProps> = ({
   onParticipate
 }) => {
   const [competitions, setCompetitions] = useState<Competition[]>([]);
-  const [loading, setLoading] = useState(true);
   const [selectedComp, setSelectedComp] = useState<Competition | null>(null);
 
   useEffect(() => {
-    const fetchCompetitions = async () => {
-      try {
-        const list = await adminService.getCompetitions();
-        const published = list.filter((c) => c.isPublished);
-        setCompetitions(published);
-      } catch {
-        setCompetitions([]);
-      } finally {
-        setLoading(false);
-      }
-    };
+    competitionRepository.getPublishedCompetitions().then((list) => {
+      setCompetitions(list.filter((c) => c.isPublished));
+    });
 
-    fetchCompetitions();
+    const unsubscribe = competitionRepository.getCompetitionsStream((list) => {
+      setCompetitions(list.filter((c) => c.isPublished));
+    });
+
+    return () => unsubscribe();
   }, []);
 
-  if (loading || competitions.length === 0) return null;
+  if (competitions.length === 0) return null;
 
   return (
     <div className="space-y-3 font-tajawal">

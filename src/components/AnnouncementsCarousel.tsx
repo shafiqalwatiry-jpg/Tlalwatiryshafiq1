@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Announcement } from '../types';
-import { adminService } from '../services/AdminService';
+import { announcementRepository } from '../services/Repositories';
 import {
   Megaphone,
   ChevronRight,
@@ -11,24 +11,23 @@ import {
 } from 'lucide-react';
 
 export const AnnouncementsCarousel: React.FC = () => {
-  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [announcements, setAnnouncements] = useState<Announcement[]>(() => {
+    return [];
+  });
   const [currentIndex, setCurrentIndex] = useState(0);
 
   useEffect(() => {
-    const fetchAnnouncements = async () => {
-      try {
-        const list = await adminService.getAnnouncements();
-        const published = list.filter((a) => a.isPublished);
-        setAnnouncements(published);
-      } catch {
-        setAnnouncements([]);
-      } finally {
-        setLoading(false);
-      }
-    };
+    // Initial fetch from cache
+    announcementRepository.getPublishedAnnouncements().then((list) => {
+      setAnnouncements(list.filter((a) => a.isPublished));
+    });
 
-    fetchAnnouncements();
+    // Stream subscription for realtime & background sync
+    const unsubscribe = announcementRepository.getAnnouncementsStream((list) => {
+      setAnnouncements(list.filter((a) => a.isPublished));
+    });
+
+    return () => unsubscribe();
   }, []);
 
   // Auto-scroll carousel every 6s
@@ -40,7 +39,7 @@ export const AnnouncementsCarousel: React.FC = () => {
     return () => clearInterval(interval);
   }, [announcements.length]);
 
-  if (loading || announcements.length === 0) return null;
+  if (announcements.length === 0) return null;
 
   const current = announcements[currentIndex];
 

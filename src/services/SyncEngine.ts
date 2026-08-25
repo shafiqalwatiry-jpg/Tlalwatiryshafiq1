@@ -511,7 +511,7 @@ export class SyncEngine {
         annoMap.set(d.id, {
           id: d.id,
           title: d.title,
-          content: d.content,
+          body: d.body || d.content || '',
           linkUrl: d.link_url,
           imagePath: d.image_path ? SupabaseService.resolveImageUrl(d.image_path, 'announcement-images') : undefined,
           isPublished: !!d.is_published,
@@ -532,10 +532,18 @@ export class SyncEngine {
           reciterId: d.reciter_id,
           reciterName: d.reciter_name,
           reciterAvatar: d.reciter_avatar,
-          title: d.title,
-          badgeIcon: d.badge_icon || 'award',
-          description: d.description,
-          awardedAt: d.awarded_at || d.created_at
+          rewardId: d.reward_id || d.id,
+          citationNote: d.citation_note || d.description,
+          awardedAt: d.awarded_at || d.created_at,
+          reward: d.reward || {
+            id: d.reward_id || d.id,
+            code: d.reward_code || 'HONOR',
+            title: d.title || d.reward_title || 'وسام تقديري',
+            description: d.description || d.citation_note || '',
+            category: d.category || 'COMMUNITY_FAVORITE',
+            isActive: true,
+            createdAt: d.created_at || new Date().toISOString()
+          }
         });
       });
       this.honors = Array.from(honorMap.values());
@@ -925,7 +933,7 @@ export class SyncEngine {
           const mapped: Announcement = {
             id: newRow.id,
             title: newRow.title,
-            content: newRow.content,
+            body: newRow.body || newRow.content || '',
             linkUrl: newRow.link_url,
             imagePath: newRow.image_path ? SupabaseService.resolveImageUrl(newRow.image_path, 'announcement-images') : undefined,
             isPublished: !!newRow.is_published,
@@ -959,10 +967,18 @@ export class SyncEngine {
           reciterId: newRow.reciter_id,
           reciterName: newRow.reciter_name,
           reciterAvatar: newRow.reciter_avatar,
-          title: newRow.title,
-          badgeIcon: newRow.badge_icon || 'award',
-          description: newRow.description,
-          awardedAt: newRow.awarded_at || newRow.created_at
+          rewardId: newRow.reward_id || newRow.id,
+          citationNote: newRow.citation_note || newRow.description,
+          awardedAt: newRow.awarded_at || newRow.created_at,
+          reward: newRow.reward || {
+            id: newRow.reward_id || newRow.id,
+            code: newRow.reward_code || 'HONOR',
+            title: newRow.title || newRow.reward_title || 'وسام تقديري',
+            description: newRow.description || newRow.citation_note || '',
+            category: newRow.category || 'COMMUNITY_FAVORITE',
+            isActive: true,
+            createdAt: newRow.created_at || new Date().toISOString()
+          }
         };
         this.honors = [mapped, ...this.honors.filter((h) => h.id !== mapped.id)];
         changed = true;
