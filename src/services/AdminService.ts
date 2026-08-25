@@ -477,75 +477,72 @@ class AdminServiceImpl {
         }
       }
     } catch (e) {
-      console.warn('RPC get_admin_dashboard_metrics failed, falling back to direct queries:', e);
+      console.warn('RPC get_admin_dashboard_metrics failed, falling back to count queries:', e);
     }
 
-    // Strategy 2: Direct REST queries
-    const fetchJsonArray = async (endpoint: string, fallbackEndpoint?: string): Promise<any[]> => {
+    // Strategy 2: Ultra-lightweight exact count queries (fetches 0-1 item metadata instead of full tables)
+    const fetchExactCount = async (tableOrView: string, filterParams: string = ''): Promise<number> => {
       try {
-        const res = await fetch(`${SUPABASE_CONFIG.restBaseUrl}/${endpoint}`, {
-          headers: authHeaders
+        const queryStr = filterParams ? `?${filterParams}&select=id&limit=1` : '?select=id&limit=1';
+        const res = await fetch(`${SUPABASE_CONFIG.restBaseUrl}/${tableOrView}${queryStr}`, {
+          method: 'GET',
+          headers: {
+            ...authHeaders,
+            Prefer: 'count=exact',
+            Range: '0-0'
+          }
         });
         if (res.ok) {
-          const data = await res.json();
-          if (Array.isArray(data)) return data;
+          const cr = res.headers.get('content-range');
+          if (cr && cr.includes('/')) {
+            const countStr = cr.split('/')[1];
+            if (countStr && countStr !== '*') {
+              const num = parseInt(countStr, 10);
+              if (!isNaN(num)) return num;
+            }
+          }
+          const json = await res.json().catch(() => []);
+          return Array.isArray(json) ? json.length : 0;
         }
       } catch (e) {
-        console.warn(`Fetch from ${endpoint} failed:`, e);
+        console.warn(`fetchExactCount failed for ${tableOrView}:`, e);
       }
-
-      if (fallbackEndpoint) {
-        try {
-          const fbRes = await fetch(`${SUPABASE_CONFIG.restBaseUrl}/${fallbackEndpoint}`, {
-            headers: authHeaders
-          });
-          if (fbRes.ok) {
-            const fbData = await fbRes.json();
-            if (Array.isArray(fbData)) return fbData;
-          }
-        } catch (e) {
-          console.warn(`Fallback fetch from ${fallbackEndpoint} failed:`, e);
-        }
-      }
-
-      return [];
+      return 0;
     };
 
     try {
       const [
-        recitersData,
-        recitationsData,
-        pendingData,
-        listensData,
-        likesData,
-        compsData,
-        usersData
-      ] = await Promise.all([
-        fetchJsonArray('reciters?select=id,is_published', 'public_reciters_view?select=id'),
-        fetchJsonArray('recitations?select=id,status', 'public_recitations_view?select=id'),
-        fetchJsonArray('recitation_submissions?status=eq.PENDING&select=id'),
-        fetchJsonArray('listen_events?select=id'),
-        fetchJsonArray('likes?select=recitation_id'),
-        fetchJsonArray('competitions?is_published=eq.true&select=id'),
-        fetchJsonArray('user_profiles?select=id')
-      ]);
-
-      const totalReciters = recitersData.length;
-      const publishedReciters = recitersData.filter((r) => r.is_published !== false).length;
-
-      const totalRecitations = recitationsData.length;
-      const publishedRecitations = recitationsData.filter((r) => r.status === 'APPROVED' || !r.status).length;
-
-      return {
         totalReciters,
         publishedReciters,
         totalRecitations,
         publishedRecitations,
-        pendingSubmissions: pendingData.length,
-        totalListens: listensData.length,
-        totalLikes: likesData.length,
-        activeCompetitions: compsData.length,
-        totalUsers: usersData.length
+        pendingSubmissions,
+        totalListens,
+        totalLikes,
+        activeCompetitions,
+        totalUsers
+      ] = await Promise.all([
+        fetchExactCount('reciters'),
+        fetchExactCount('reciters', 'is_published=neq.false'),
+        fetchExactCount('recitations'),
+        fetchExactCount('recitations', 'status=eq.APPROVED'),
+        fetchExactCount('recitation_submissions', 'status=eq.PENDING'),
+        fetchExactCount('listen_events'),
+        fetchExactCount('likes'),
+        fetchExactCount('competitions', 'is_published=eq.true'),
+        fetchExactCount('user_profiles')
+      ]);
+
+      return {
+        totalReciters,
+        publishedReciters: publishedReciters || totalReciters,
+        totalRecitations,
+        publishedRecitations: publishedRecitations || totalRecitations,
+        pendingSubmissions,
+        totalListens,
+        totalLikes,
+        activeCompetitions,
+        totalUsers
       };
     } catch (e) {
       console.error('Failed to fetch dashboard stats:', e);
@@ -1001,6 +998,141 @@ class AdminServiceImpl {
   // ============================================================================
   // 5. RECITATIONS MANAGEMENT
   // ============================================================================
+
+  async getAdminRecitationsPaginated(options: {
+    page?: number;
+    pageSize?: number;
+    reciterId?: string;
+    status?: string;
+    search?: string;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+  } = {}): Promise<{
+    data: any[];
+    totalCount: number;
+    page: number;
+    pageSize: number;
+    totalPages: number;
+  }> {
+    const authHeaders = this.getAuthHeaders();
+    const page = Math.max(1, options.page || 1);
+    const pageSize = Math.max(1, Math.min(100, options.pageSize || 25));
+    const offset = (page - 1) * pageSize;
+    const to = offset + pageSize - 1;
+
+    const queryParts: string[] = [];
+    queryParts.push('select=*,reciters(display_name,pseudonym,country,profile_image_path)');
+    queryParts.push(`limit=${pageSize}`);
+    queryParts.push(`offset=${offset}`);
+
+    const sortField = options.sortBy || 'created_at';
+    const sortDir = options.sortOrder || 'desc';
+    queryParts.push(`order=${sortField}.${sortDir}`);
+
+    if (options.reciterId && options.reciterId !== 'all') {
+      queryParts.push(`reciter_id=eq.${encodeURIComponent(options.reciterId)}`);
+    }
+
+    if (options.status && options.status !== 'all') {
+      queryParts.push(`status=eq.${encodeURIComponent(options.status.toUpperCase())}`);
+    }
+
+    if (options.search && options.search.trim()) {
+      const q = encodeURIComponent(`*${options.search.trim()}*`);
+      queryParts.push(`or=(surah_name.ilike.${q},riwayah.ilike.${q})`);
+    }
+
+    const queryString = queryParts.join('&');
+
+    try {
+      const url = `${SUPABASE_CONFIG.restBaseUrl}/recitations?${queryString}`;
+      const res = await fetch(url, {
+        headers: {
+          ...authHeaders,
+          Prefer: 'count=exact',
+          Range: `${offset}-${to}`,
+          'Range-Unit': 'items'
+        }
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        let totalCount = Array.isArray(data) ? data.length : 0;
+        const cr = res.headers.get('content-range');
+        if (cr && cr.includes('/')) {
+          const totalStr = cr.split('/')[1];
+          if (totalStr && totalStr !== '*') {
+            const parsed = parseInt(totalStr, 10);
+            if (!isNaN(parsed)) totalCount = parsed;
+          }
+        }
+
+        return {
+          data: Array.isArray(data) ? data : [],
+          totalCount,
+          page,
+          pageSize,
+          totalPages: Math.ceil(totalCount / pageSize) || 1
+        };
+      }
+    } catch (e) {
+      console.warn('Paginated fetch from /recitations failed, trying fallback:', e);
+    }
+
+    // Fallback query to public_recitations_view
+    try {
+      const viewParts: string[] = [
+        'select=*',
+        `limit=${pageSize}`,
+        `offset=${offset}`,
+        `order=published_at.${sortDir}`
+      ];
+      if (options.reciterId && options.reciterId !== 'all') {
+        viewParts.push(`reciter_id=eq.${encodeURIComponent(options.reciterId)}`);
+      }
+      if (options.search && options.search.trim()) {
+        const q = encodeURIComponent(`*${options.search.trim()}*`);
+        viewParts.push(`or=(surah_name.ilike.${q},riwayah.ilike.${q})`);
+      }
+      const viewUrl = `${SUPABASE_CONFIG.restBaseUrl}/public_recitations_view?${viewParts.join('&')}`;
+      const viewRes = await fetch(viewUrl, {
+        headers: {
+          ...authHeaders,
+          Prefer: 'count=exact',
+          Range: `${offset}-${to}`,
+          'Range-Unit': 'items'
+        }
+      });
+      if (viewRes.ok) {
+        const viewData = await viewRes.json();
+        let totalCount = Array.isArray(viewData) ? viewData.length : 0;
+        const cr = viewRes.headers.get('content-range');
+        if (cr && cr.includes('/')) {
+          const totalStr = cr.split('/')[1];
+          if (totalStr && totalStr !== '*') {
+            const parsed = parseInt(totalStr, 10);
+            if (!isNaN(parsed)) totalCount = parsed;
+          }
+        }
+
+        return {
+          data: Array.isArray(viewData) ? viewData : [],
+          totalCount,
+          page,
+          pageSize,
+          totalPages: Math.ceil(totalCount / pageSize) || 1
+        };
+      }
+    } catch {}
+
+    return {
+      data: [],
+      totalCount: 0,
+      page,
+      pageSize,
+      totalPages: 1
+    };
+  }
 
   async getAllAdminRecitations(reciterId?: string): Promise<any[]> {
     const authHeaders = this.getAuthHeaders();

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { adminService } from '../../services/AdminService';
 import { SupabaseService } from '../../services/SupabaseService';
 import { SURAH_LIST, RIWAYAT_OPTIONS } from '../../data/quranSurahs';
@@ -21,14 +21,22 @@ import {
   Star,
   CheckCircle,
   Upload,
-  FileAudio
+  FileAudio,
+  ChevronRight,
+  ChevronLeft
 } from 'lucide-react';
 
 export function AdminRecitationsView() {
   const [recitations, setRecitations] = useState<any[]>([]);
   const [reciters, setReciters] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [totalCount, setTotalCount] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(24);
+
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [selectedReciterFilter, setSelectedReciterFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
 
@@ -58,7 +66,50 @@ export function AdminRecitationsView() {
   // Audio Preview
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [audioElem, setAudioElem] = useState<HTMLAudioElement | null>(null);
-  const uploadedFileObjectRef = React.useRef<File | null>(null);
+  const uploadedFileObjectRef = useRef<File | null>(null);
+
+  // Debounce search input
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedSearch(searchQuery.trim());
+      setCurrentPage(1);
+    }, 300);
+    return () => clearTimeout(handler);
+  }, [searchQuery]);
+
+  // Load reciters once for dropdown filters
+  useEffect(() => {
+    adminService.getAllAdminReciters().then((res) => {
+      if (Array.isArray(res)) setReciters(res);
+    }).catch(() => {});
+  }, []);
+
+  const loadData = useCallback(async (showLoading = true) => {
+    if (showLoading) setIsLoading(true);
+    try {
+      const result = await adminService.getAdminRecitationsPaginated({
+        page: currentPage,
+        pageSize,
+        reciterId: selectedReciterFilter === 'all' ? undefined : selectedReciterFilter,
+        status: statusFilter === 'all' ? undefined : statusFilter,
+        search: debouncedSearch || undefined,
+        sortBy: 'created_at',
+        sortOrder: 'desc'
+      });
+
+      setRecitations(result.data);
+      setTotalCount(result.totalCount);
+      setTotalPages(result.totalPages);
+    } catch (e) {
+      console.error('Failed to load paginated recitations:', e);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [currentPage, pageSize, selectedReciterFilter, statusFilter, debouncedSearch]);
+
+  useEffect(() => {
+    loadData(true);
+  }, [loadData]);
 
   const handleAudioFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -111,28 +162,6 @@ export function AdminRecitationsView() {
       setAyahEnd(surahObj.ayahsCount);
     }
   };
-
-  const loadData = async () => {
-    setIsLoading(true);
-    try {
-      const [recs, recsList] = await Promise.all([
-        adminService.getAllAdminRecitations(
-          selectedReciterFilter === 'all' ? undefined : selectedReciterFilter
-        ),
-        adminService.getAllAdminReciters()
-      ]);
-      setRecitations(recs);
-      setReciters(recsList);
-    } catch (e) {
-      console.error('Failed to load recitations:', e);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    loadData();
-  }, [selectedReciterFilter]);
 
   const togglePlay = (rec: any) => {
     let url = SupabaseService.resolveAudioUrl(rec);
@@ -254,7 +283,7 @@ export function AdminRecitationsView() {
           ? trimmedStorage
           : `recitation-audio/${trimmedStorage.replace(/^\/+/, '')}`;
       } else if (editingRecitation) {
-        finalStorage = undefined; // Retain existing storage path during edit if unchanged
+        finalStorage = undefined;
       } else {
         setFormError('يرجى اختيار ملف صوتي أو إدخال مسار صحيح');
         setIsSaving(false);
@@ -301,7 +330,7 @@ export function AdminRecitationsView() {
       }
 
       setIsModalOpen(false);
-      await loadData();
+      await loadData(false);
     } catch (err: any) {
       setFormError(err.message || 'فشلت عملية حفظ التلاوة');
     } finally {
@@ -311,53 +340,49 @@ export function AdminRecitationsView() {
 
   const handleToggleStatus = async (rec: any) => {
     const nextStatus = rec.status === 'APPROVED' ? 'PENDING' : 'APPROVED';
+    // Optimistic UI update
+    setRecitations((prev) =>
+      prev.map((r) => (r.id === rec.id ? { ...r, status: nextStatus } : r))
+    );
     try {
       await adminService.updateRecitation(rec.id, { status: nextStatus });
-      setRecitations((prev) =>
-        prev.map((r) => (r.id === rec.id ? { ...r, status: nextStatus } : r))
-      );
     } catch (e) {
       console.error('Failed to toggle status:', e);
+      // Revert on error
+      setRecitations((prev) =>
+        prev.map((r) => (r.id === rec.id ? { ...r, status: rec.status } : r))
+      );
     }
   };
 
   const handleToggleStaffPick = async (rec: any) => {
+    const nextVal = !rec.is_staff_pick;
+    // Optimistic UI update
+    setRecitations((prev) =>
+      prev.map((r) => (r.id === rec.id ? { ...r, is_staff_pick: nextVal } : r))
+    );
     try {
-      await adminService.updateRecitation(rec.id, {
-        isStaffPick: !rec.is_staff_pick
-      });
-      setRecitations((prev) =>
-        prev.map((r) =>
-          r.id === rec.id ? { ...r, is_staff_pick: !r.is_staff_pick } : r
-        )
-      );
+      await adminService.updateRecitation(rec.id, { isStaffPick: nextVal });
     } catch (e) {
       console.error('Failed to toggle staff pick:', e);
+      setRecitations((prev) =>
+        prev.map((r) => (r.id === rec.id ? { ...r, is_staff_pick: rec.is_staff_pick } : r))
+      );
     }
   };
 
   const handleDelete = async (id: string) => {
     if (!window.confirm('هل أنت متأكد من حذف هذه التلاوة؟')) return;
+    // Optimistic UI removal
+    setRecitations((prev) => prev.filter((r) => r.id !== id));
+    setTotalCount((prev) => Math.max(0, prev - 1));
     try {
       await adminService.deleteRecitation(id);
-      setRecitations((prev) => prev.filter((r) => r.id !== id));
     } catch (e: any) {
       alert(e.message || 'فشل حذف التلاوة');
+      loadData(false);
     }
   };
-
-  const filteredRecitations = recitations.filter((r) => {
-    const q = searchQuery.toLowerCase();
-    const matchesQuery =
-      r.surah_name?.toLowerCase().includes(q) ||
-      r.reciters?.display_name?.toLowerCase().includes(q) ||
-      r.riwayah?.toLowerCase().includes(q);
-
-    const matchesStatus =
-      statusFilter === 'all' || r.status === statusFilter.toUpperCase();
-
-    return matchesQuery && matchesStatus;
-  });
 
   return (
     <div className="space-y-6 select-none font-tajawal">
@@ -369,16 +394,16 @@ export function AdminRecitationsView() {
             <span>إدارة مكتبة التلاوات</span>
           </h1>
           <p className="text-xs text-[#8BA496] mt-0.5">
-            إضافة وتعديل التلاوات القرآنية، إدارة روابط الصوت، وتحديد اختيارات الإدارة
+            إضافة وتعديل التلاوات القرآنية مع دعم التصفح السريع والبحث المباشر
           </p>
         </div>
 
         <div className="flex items-center gap-2">
           <button
-            onClick={loadData}
+            onClick={() => loadData(true)}
             disabled={isLoading}
             className="p-2 bg-[#162720] hover:bg-[#1E372C] text-[#A8C2B3] rounded-xl border border-[#2B493B] transition"
-            title="تحديث"
+            title="تحديث القائمة"
           >
             <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
           </button>
@@ -400,7 +425,7 @@ export function AdminRecitationsView() {
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="بحث بالسورة أو القارئ..."
+            placeholder="بحث بالسورة أو الرواية..."
             className="w-full bg-[#14241D] border border-[#234235] rounded-xl px-3.5 py-2 pr-9 text-xs text-white placeholder-[#5A7B6C] focus:outline-none focus:border-[#3E745A]"
           />
           <Search className="w-4 h-4 text-[#5A7B6C] absolute right-3 top-2.5 pointer-events-none" />
@@ -409,7 +434,10 @@ export function AdminRecitationsView() {
         <div>
           <select
             value={selectedReciterFilter}
-            onChange={(e) => setSelectedReciterFilter(e.target.value)}
+            onChange={(e) => {
+              setSelectedReciterFilter(e.target.value);
+              setCurrentPage(1);
+            }}
             className="w-full bg-[#14241D] border border-[#234235] rounded-xl px-3 py-2 text-xs text-white focus:outline-none"
           >
             <option value="all">جميع القراء ({reciters.length})</option>
@@ -424,7 +452,10 @@ export function AdminRecitationsView() {
         <div>
           <select
             value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
+            onChange={(e) => {
+              setStatusFilter(e.target.value);
+              setCurrentPage(1);
+            }}
             className="w-full bg-[#14241D] border border-[#234235] rounded-xl px-3 py-2 text-xs text-white focus:outline-none"
           >
             <option value="all">جميع حالات النشر</option>
@@ -435,20 +466,46 @@ export function AdminRecitationsView() {
         </div>
       </div>
 
+      {/* Stats & Pagination summary bar */}
+      <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 bg-[#122019] border border-[#1F372C] rounded-xl text-xs text-[#8BA496]">
+        <div className="flex items-center gap-2">
+          <span>المعروض: <strong className="text-white">{recitations.length}</strong></span>
+          <span>•</span>
+          <span>إجمالي المطابق: <strong className="text-[#60A5FA]">{totalCount.toLocaleString('ar-EG')}</strong> تلاوة</span>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <span>الصفحة {currentPage} من {Math.max(1, totalPages)}</span>
+          <select
+            value={pageSize}
+            onChange={(e) => {
+              setPageSize(Number(e.target.value));
+              setCurrentPage(1);
+            }}
+            className="bg-[#182C22] border border-[#2B493B] text-white text-[11px] rounded-lg px-2 py-1 focus:outline-none"
+          >
+            <option value={12}>12 لكل صفحة</option>
+            <option value={24}>24 لكل صفحة</option>
+            <option value={48}>48 لكل صفحة</option>
+            <option value={96}>96 لكل صفحة</option>
+          </select>
+        </div>
+      </div>
+
       {/* Recitations Table / Cards */}
       {isLoading ? (
         <div className="py-16 text-center space-y-3">
           <div className="w-8 h-8 border-2 border-[#60A5FA]/30 border-t-[#60A5FA] rounded-full animate-spin mx-auto"></div>
           <p className="text-xs text-[#8BA496]">جاري تحميل مكتبة التلاوات...</p>
         </div>
-      ) : filteredRecitations.length === 0 ? (
+      ) : recitations.length === 0 ? (
         <div className="py-16 px-4 bg-[#14241D]/50 border border-dashed border-[#234235] rounded-2xl text-center space-y-3">
           <div className="w-12 h-12 rounded-full bg-[#1A3328] border border-[#2B5742] flex items-center justify-center mx-auto text-[#8BA496]">
             <Music className="w-6 h-6" />
           </div>
-          <h3 className="text-base font-bold text-[#F0F5F2]">لا توجد تلاوات حتى الآن</h3>
+          <h3 className="text-base font-bold text-[#F0F5F2]">لا توجد تلاوات مطابقة</h3>
           <p className="text-xs text-[#8BA496] max-w-sm mx-auto">
-            يمكنك نشر تلاوات جديدة للقراء المعتمدين أو قبول الطلبات الواردة.
+            لم يتم العثور على تلاوات وفق معايير البحث والتصفية المحددة.
           </p>
           <button
             onClick={openCreateModal}
@@ -459,130 +516,179 @@ export function AdminRecitationsView() {
           </button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filteredRecitations.map((rec) => (
-            <div
-              key={rec.id}
-              className="p-4 bg-[#14241D] border border-[#234235] rounded-2xl space-y-3 shadow-sm hover:border-[#2E5E49] transition flex flex-col justify-between"
-            >
-              <div className="space-y-2.5">
-                <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <h3 className="font-bold text-sm text-[#F0F5F2] flex items-center gap-1.5">
-                      <BookOpen className="w-4 h-4 text-[#D4AF37]" />
-                      <span>سورة {rec.surah_name}</span>
-                      <span className="text-xs font-normal text-[#8BA496]">
-                        ({rec.ayah_start} - {rec.ayah_end})
-                      </span>
-                    </h3>
-                    <p className="text-xs text-[#A8C2B3] mt-0.5 flex items-center gap-1">
-                      <User className="w-3 h-3 text-[#4B8569]" />
-                      <span>{rec.reciters?.display_name || 'قارئ مسجل'}</span>
-                      <span>•</span>
-                      <span>رواية {rec.riwayah}</span>
-                    </p>
-                  </div>
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {recitations.map((rec) => (
+              <div
+                key={rec.id}
+                className="p-4 bg-[#14241D] border border-[#234235] rounded-2xl space-y-3 shadow-sm hover:border-[#2E5E49] transition flex flex-col justify-between"
+              >
+                <div className="space-y-2.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <h3 className="font-bold text-sm text-[#F0F5F2] flex items-center gap-1.5">
+                        <BookOpen className="w-4 h-4 text-[#D4AF37]" />
+                        <span>سورة {rec.surah_name}</span>
+                        <span className="text-xs font-normal text-[#8BA496]">
+                          ({rec.ayah_start} - {rec.ayah_end})
+                        </span>
+                      </h3>
+                      <p className="text-xs text-[#A8C2B3] mt-0.5 flex items-center gap-1">
+                        <User className="w-3 h-3 text-[#4B8569]" />
+                        <span>{rec.reciters?.display_name || rec.reciters?.pseudonym || 'قارئ مسجل'}</span>
+                        <span>•</span>
+                        <span>رواية {rec.riwayah}</span>
+                      </p>
+                    </div>
 
-                  <span
-                    className={`px-2 py-0.5 text-[10px] font-bold rounded-md ${
-                      rec.status === 'APPROVED'
-                        ? 'bg-emerald-950/70 border border-emerald-800 text-emerald-300'
-                        : rec.status === 'PENDING'
-                        ? 'bg-amber-950/70 border border-amber-800 text-amber-300'
-                        : 'bg-rose-950/70 border border-rose-800 text-rose-300'
-                    }`}
-                  >
-                    {rec.status === 'APPROVED'
-                      ? 'منشورة عامة'
-                      : rec.status === 'PENDING'
-                      ? 'قيد المراجعة'
-                      : 'مرفوضة'}
-                  </span>
-                </div>
-
-                {rec.description && (
-                  <p className="text-xs text-[#8BA496] line-clamp-2 bg-[#0D1813] p-2 rounded-xl border border-[#1F372C]">
-                    {rec.description}
-                  </p>
-                )}
-
-                {/* Staff pick badge */}
-                {rec.is_staff_pick && (
-                  <div className="inline-flex items-center gap-1 px-2 py-0.5 bg-[#D4AF37]/15 border border-[#D4AF37]/40 rounded text-[10px] text-[#D4AF37] font-semibold">
-                    <Sparkles className="w-3 h-3" />
-                    <span>اختيار الإدارة المميز</span>
-                  </div>
-                )}
-              </div>
-
-              {/* Action Toolbar */}
-              <div className="space-y-2 pt-2 border-t border-[#1F372C]">
-                {/* Audio preview button */}
-                <button
-                  onClick={() => togglePlay(rec)}
-                  className="w-full py-1.5 px-3 bg-[#1A3328] hover:bg-[#224435] border border-[#2B5742] rounded-xl text-xs font-semibold text-[#D4AF37] flex items-center justify-center gap-1.5 transition"
-                >
-                  {playingId === rec.id ? (
-                    <>
-                      <Pause className="w-3.5 h-3.5" />
-                      <span>إيقاف الصوت</span>
-                    </>
-                  ) : (
-                    <>
-                      <Play className="w-3.5 h-3.5" />
-                      <span>تشغيل ومعاينة</span>
-                    </>
-                  )}
-                </button>
-
-                <div className="flex items-center justify-between text-xs pt-1">
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => handleToggleStatus(rec)}
-                      className={`p-1.5 rounded-lg border transition ${
+                    <span
+                      className={`px-2 py-0.5 text-[10px] font-bold rounded-md ${
                         rec.status === 'APPROVED'
-                          ? 'bg-emerald-950/40 border-emerald-800 text-emerald-400 hover:bg-emerald-900/60'
-                          : 'bg-zinc-900 border-zinc-700 text-zinc-400 hover:bg-zinc-800'
+                          ? 'bg-emerald-950/70 border border-emerald-800 text-emerald-300'
+                          : rec.status === 'PENDING'
+                          ? 'bg-amber-950/70 border border-amber-800 text-amber-300'
+                          : 'bg-rose-950/70 border border-rose-800 text-rose-300'
                       }`}
-                      title={rec.status === 'APPROVED' ? 'إلغاء النشر' : 'نشر التلاوة'}
                     >
-                      {rec.status === 'APPROVED' ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
-                    </button>
-
-                    <button
-                      onClick={() => handleToggleStaffPick(rec)}
-                      className={`p-1.5 rounded-lg border transition ${
-                        rec.is_staff_pick
-                          ? 'bg-amber-950/40 border-amber-800 text-amber-300 hover:bg-amber-900/60'
-                          : 'bg-zinc-900 border-zinc-700 text-zinc-400 hover:bg-zinc-800'
-                      }`}
-                      title="تمييز التلاوة"
-                    >
-                      <Star className="w-3.5 h-3.5" />
-                    </button>
+                      {rec.status === 'APPROVED'
+                        ? 'منشورة عامة'
+                        : rec.status === 'PENDING'
+                        ? 'قيد المراجعة'
+                        : 'مرفوضة'}
+                    </span>
                   </div>
 
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      onClick={() => openEditModal(rec)}
-                      className="p-1.5 bg-[#1A3328] hover:bg-[#224435] border border-[#2B5742] text-[#A8C2B3] hover:text-white rounded-lg transition"
-                      title="تعديل"
-                    >
-                      <Edit className="w-3.5 h-3.5" />
-                    </button>
+                  {rec.description && (
+                    <p className="text-xs text-[#8BA496] line-clamp-2 bg-[#0D1813] p-2 rounded-xl border border-[#1F372C]">
+                      {rec.description}
+                    </p>
+                  )}
 
-                    <button
-                      onClick={() => handleDelete(rec.id)}
-                      className="p-1.5 bg-rose-950/50 hover:bg-rose-900/70 border border-rose-800 text-rose-300 rounded-lg transition"
-                      title="حذف"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                  {/* Staff pick badge */}
+                  {rec.is_staff_pick && (
+                    <div className="inline-flex items-center gap-1 px-2 py-0.5 bg-[#D4AF37]/15 border border-[#D4AF37]/40 rounded text-[10px] text-[#D4AF37] font-semibold">
+                      <Sparkles className="w-3 h-3" />
+                      <span>اختيار الإدارة المميز</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Action Toolbar */}
+                <div className="space-y-2 pt-2 border-t border-[#1F372C]">
+                  {/* Audio preview button */}
+                  <button
+                    onClick={() => togglePlay(rec)}
+                    className="w-full py-1.5 px-3 bg-[#1A3328] hover:bg-[#224435] border border-[#2B5742] rounded-xl text-xs font-semibold text-[#D4AF37] flex items-center justify-center gap-1.5 transition"
+                  >
+                    {playingId === rec.id ? (
+                      <>
+                        <Pause className="w-3.5 h-3.5" />
+                        <span>إيقاف الصوت</span>
+                      </>
+                    ) : (
+                      <>
+                        <Play className="w-3.5 h-3.5" />
+                        <span>تشغيل ومعاينة</span>
+                      </>
+                    )}
+                  </button>
+
+                  <div className="flex items-center justify-between text-xs pt-1">
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => handleToggleStatus(rec)}
+                        className={`p-1.5 rounded-lg border transition ${
+                          rec.status === 'APPROVED'
+                            ? 'bg-emerald-950/40 border-emerald-800 text-emerald-400 hover:bg-emerald-900/60'
+                            : 'bg-zinc-900 border-zinc-700 text-zinc-400 hover:bg-zinc-800'
+                        }`}
+                        title={rec.status === 'APPROVED' ? 'إلغاء النشر' : 'نشر التلاوة'}
+                      >
+                        {rec.status === 'APPROVED' ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+                      </button>
+
+                      <button
+                        onClick={() => handleToggleStaffPick(rec)}
+                        className={`p-1.5 rounded-lg border transition ${
+                          rec.is_staff_pick
+                            ? 'bg-amber-950/40 border-amber-800 text-amber-300 hover:bg-amber-900/60'
+                            : 'bg-zinc-900 border-zinc-700 text-zinc-400 hover:bg-zinc-800'
+                        }`}
+                        title="تمييز التلاوة"
+                      >
+                        <Star className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => openEditModal(rec)}
+                        className="p-1.5 bg-[#1A3328] hover:bg-[#224435] border border-[#2B5742] text-[#A8C2B3] hover:text-white rounded-lg transition"
+                        title="تعديل"
+                      >
+                        <Edit className="w-3.5 h-3.5" />
+                      </button>
+
+                      <button
+                        onClick={() => handleDelete(rec.id)}
+                        className="p-1.5 bg-rose-950/50 hover:bg-rose-900/70 border border-rose-800 text-rose-300 rounded-lg transition"
+                        title="حذف"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
+            ))}
+          </div>
+
+          {/* Pagination Navigation Footer */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-center gap-3 pt-4 pb-2">
+              <button
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage <= 1 || isLoading}
+                className="px-3 py-1.5 bg-[#14241D] hover:bg-[#1A3328] disabled:opacity-40 border border-[#234235] text-xs font-bold text-white rounded-xl flex items-center gap-1 transition"
+              >
+                <ChevronRight className="w-4 h-4" />
+                <span>الصفحة السابقة</span>
+              </button>
+
+              <div className="flex items-center gap-1">
+                {Array.from({ length: Math.min(5, totalPages) }, (_, idx) => {
+                  let pageNum = currentPage;
+                  if (totalPages <= 5) pageNum = idx + 1;
+                  else if (currentPage <= 3) pageNum = idx + 1;
+                  else if (currentPage >= totalPages - 2) pageNum = totalPages - 4 + idx;
+                  else pageNum = currentPage - 2 + idx;
+
+                  return (
+                    <button
+                      key={pageNum}
+                      onClick={() => setCurrentPage(pageNum)}
+                      className={`w-8 h-8 rounded-lg text-xs font-bold transition ${
+                        currentPage === pageNum
+                          ? 'bg-[#2B5742] text-white border border-[#3E745A]'
+                          : 'bg-[#14241D] text-[#8BA496] hover:bg-[#1A3328] border border-[#234235]'
+                      }`}
+                    >
+                      {pageNum}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <button
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={currentPage >= totalPages || isLoading}
+                className="px-3 py-1.5 bg-[#14241D] hover:bg-[#1A3328] disabled:opacity-40 border border-[#234235] text-xs font-bold text-white rounded-xl flex items-center gap-1 transition"
+              >
+                <span>الصفحة التالية</span>
+                <ChevronLeft className="w-4 h-4" />
+              </button>
             </div>
-          ))}
+          )}
         </div>
       )}
 
