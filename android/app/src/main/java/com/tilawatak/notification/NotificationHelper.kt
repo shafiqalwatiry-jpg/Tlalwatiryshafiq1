@@ -102,7 +102,7 @@ object NotificationHelper {
             val smallIconRes = try {
                 val appInfo = context.packageManager.getApplicationInfo(context.packageName, PackageManager.GET_META_DATA)
                 if (appInfo.icon != 0) appInfo.icon else android.R.drawable.ic_dialog_info
-            } catch (_: Exception) {
+            } catch (e: Exception) {
                 android.R.drawable.ic_dialog_info
             }
 

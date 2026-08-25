@@ -193,7 +193,7 @@ class Media3AudioPlayerService(
                         timestampEpochMs = System.currentTimeMillis()
                     )
                 )
-            } catch (_: Exception) {}
+            } catch (e: Exception) {}
         }
     }
 }

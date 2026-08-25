@@ -96,7 +96,7 @@ class TilawatakSyncEngine private constructor(
     /**
      * Trigger background incremental or full sync
      */
-    fun triggerSync(forceFull: boolean = false) {
+    fun triggerSync(forceFull: Boolean = false) {
         if (_isSyncing.value) return
         syncJob?.cancel()
         syncJob = scope.launch {
@@ -491,7 +491,7 @@ class TilawatakSyncEngine private constructor(
                 }
                 _announcements.value = list
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {}
     }
 
     private fun persistToDiskCache() {
@@ -558,7 +558,7 @@ class TilawatakSyncEngine private constructor(
 
                 val file = File(ctx.filesDir, cacheFileName)
                 file.writeText(root.toString())
-            } catch (_: Exception) {}
+            } catch (e: Exception) {}
         }
     }
 }
