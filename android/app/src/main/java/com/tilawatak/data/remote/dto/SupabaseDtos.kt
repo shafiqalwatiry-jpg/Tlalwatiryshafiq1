@@ -103,7 +103,7 @@ object SupabaseDtoMappers {
         val coverUrl = SupabaseConfig.getPublicCoverUrl(coverPath)
         val description = obj.optString("description", "")
         val statusStr = obj.optString("status", "APPROVED")
-        val status = try { SubmissionStatus.valueOf(statusStr.toUpperCase(Locale.US)) } catch (e: Exception) { SubmissionStatus.APPROVED }
+        val status = try { SubmissionStatus.valueOf(statusStr.uppercase(Locale.US)) } catch (e: Exception) { SubmissionStatus.APPROVED }
         val publishedAt = parseIsoTimestamp(obj.optString("published_at", obj.optString("created_at", null)))
         val listenCount = obj.optLong("total_listens", obj.optLong("listen_count", 0L))
         val likeCount = obj.optLong("total_likes", obj.optLong("like_count", 0L))

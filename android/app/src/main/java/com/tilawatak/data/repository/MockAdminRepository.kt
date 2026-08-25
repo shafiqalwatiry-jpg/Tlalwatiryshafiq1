@@ -7,17 +7,22 @@ import com.tilawatak.domain.model.RecitationSubmission
 import com.tilawatak.domain.model.Reciter
 import com.tilawatak.domain.model.SubmissionStatus
 import com.tilawatak.domain.repository.IAdminRepository
+import com.tilawatak.domain.repository.IAnnouncementRepository
+import com.tilawatak.domain.repository.ICompetitionRepository
+import com.tilawatak.domain.repository.IRecitationRepository
+import com.tilawatak.domain.repository.IReciterRepository
+import com.tilawatak.domain.repository.ISubmissionRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 
 class MockAdminRepository(
-    private val reciterRepository: MockReciterRepository,
-    private val recitationRepository: MockRecitationRepository,
-    private val submissionRepository: MockSubmissionRepository,
-    private val announcementRepository: MockAnnouncementRepository,
-    private val competitionRepository: MockCompetitionRepository
+    private val reciterRepository: IReciterRepository,
+    private val recitationRepository: IRecitationRepository,
+    private val submissionRepository: ISubmissionRepository,
+    private val announcementRepository: IAnnouncementRepository,
+    private val competitionRepository: ICompetitionRepository
 ) : IAdminRepository {
 
     override fun getAllSubmissionsStream(status: SubmissionStatus?): Flow<List<RecitationSubmission>> {
