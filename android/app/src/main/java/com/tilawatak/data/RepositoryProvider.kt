@@ -1,5 +1,6 @@
 package com.tilawatak.data
 
+import android.content.Context
 import com.tilawatak.data.local.DefaultAnonymousInstallationIdProvider
 import com.tilawatak.data.remote.DataSourceMode
 import com.tilawatak.data.remote.SupabaseConfig
@@ -12,18 +13,10 @@ import com.tilawatak.data.remote.repository.SupabaseReciterRepository
 import com.tilawatak.data.remote.repository.SupabaseRewardRepository
 import com.tilawatak.data.remote.repository.SupabaseStatisticsRepository
 import com.tilawatak.data.remote.repository.SupabaseSubmissionRepository
+import com.tilawatak.data.remote.sync.TilawatakSyncEngine
 import com.tilawatak.data.repository.MockAdminAuthRepository
 import com.tilawatak.data.repository.MockAdminNotificationRepository
 import com.tilawatak.data.repository.MockAdminRepository
-import com.tilawatak.data.repository.MockAnnouncementRepository
-import com.tilawatak.data.repository.MockCompetitionRepository
-import com.tilawatak.data.repository.MockLikeRepository
-import com.tilawatak.data.repository.MockListenEventRepository
-import com.tilawatak.data.repository.MockRecitationRepository
-import com.tilawatak.data.repository.MockReciterRepository
-import com.tilawatak.data.repository.MockRewardRepository
-import com.tilawatak.data.repository.MockStatisticsRepository
-import com.tilawatak.data.repository.MockSubmissionRepository
 import com.tilawatak.domain.provider.AnonymousInstallationIdProvider
 import com.tilawatak.domain.repository.IAdminAuthRepository
 import com.tilawatak.domain.repository.IAdminNotificationRepository
@@ -39,83 +32,75 @@ import com.tilawatak.domain.repository.IStatisticsRepository
 import com.tilawatak.domain.repository.ISubmissionRepository
 
 /**
- * Clean dependency provider supporting seamless switching between
- * DataSourceMode.SUPABASE and DataSourceMode.MOCK.
- * UI continues depending strictly on repository interfaces.
+ * Production dependency provider powered by SISA (TilawatakSyncEngine)
+ * and Supabase live data architecture.
  */
 class RepositoryProvider(
-    val mode: DataSourceMode = SupabaseConfig.currentMode,
+    val context: Context? = null,
+    val mode: DataSourceMode = DataSourceMode.SUPABASE,
     val installationIdProvider: AnonymousInstallationIdProvider = DefaultAnonymousInstallationIdProvider()
 ) {
     val installationId: String
         get() = installationIdProvider.getInstallationId()
 
-    // Mock implementations
-    private val mockNotificationRepo by lazy { MockAdminNotificationRepository() }
-    private val mockReciterRepo by lazy { MockReciterRepository() }
-    private val mockRecitationRepo by lazy { MockRecitationRepository() }
-    private val mockStatsRepo by lazy { MockStatisticsRepository(mockRecitationRepo, mockReciterRepo) }
-    private val mockSubmissionRepo by lazy { MockSubmissionRepository(mockNotificationRepo) }
-    private val mockLikeRepo by lazy { MockLikeRepository() }
-    private val mockListenEventRepo by lazy { MockListenEventRepository() }
-    private val mockAnnouncementRepo by lazy { MockAnnouncementRepository() }
-    private val mockCompetitionRepo by lazy { MockCompetitionRepository() }
-    private val mockRewardRepo by lazy { MockRewardRepository() }
-    private val mockAdminAuthRepo by lazy { MockAdminAuthRepository() }
-    private val mockAdminRepo by lazy {
-        MockAdminRepository(
-            reciterRepository = mockReciterRepo,
-            recitationRepository = mockRecitationRepo,
-            submissionRepository = mockSubmissionRepo,
-            announcementRepository = mockAnnouncementRepo,
-            competitionRepository = mockCompetitionRepo
-        )
+    val syncEngine: TilawatakSyncEngine by lazy {
+        TilawatakSyncEngine.getInstance(context, installationId)
     }
 
-    // Supabase Live implementations
-    private val supabaseReciterRepo by lazy { SupabaseReciterRepository() }
-    private val supabaseRecitationRepo by lazy { SupabaseRecitationRepository(installationId) }
+    // Supabase Live SISA implementations
+    private val supabaseReciterRepo by lazy { SupabaseReciterRepository(syncEngine) }
+    private val supabaseRecitationRepo by lazy { SupabaseRecitationRepository(installationId, syncEngine) }
     private val supabaseStatsRepo by lazy { SupabaseStatisticsRepository() }
-    private val supabaseSubmissionRepo by lazy { SupabaseSubmissionRepository() }
+    private val supabaseSubmissionRepo by lazy { SupabaseSubmissionRepository(syncEngine) }
     private val supabaseLikeRepo by lazy { SupabaseLikeRepository(installationId) }
     private val supabaseListenEventRepo by lazy { SupabaseListenEventRepository(installationId) }
-    private val supabaseAnnouncementRepo by lazy { SupabaseAnnouncementRepository() }
-    private val supabaseCompetitionRepo by lazy { SupabaseCompetitionRepository() }
+    private val supabaseAnnouncementRepo by lazy { SupabaseAnnouncementRepository(syncEngine) }
+    private val supabaseCompetitionRepo by lazy { SupabaseCompetitionRepository(syncEngine) }
     private val supabaseRewardRepo by lazy { SupabaseRewardRepository() }
 
     val reciterRepository: IReciterRepository
-        get() = if (mode == DataSourceMode.SUPABASE) supabaseReciterRepo else mockReciterRepo
+        get() = supabaseReciterRepo
 
     val recitationRepository: IRecitationRepository
-        get() = if (mode == DataSourceMode.SUPABASE) supabaseRecitationRepo else mockRecitationRepo
+        get() = supabaseRecitationRepo
 
     val statisticsRepository: IStatisticsRepository
-        get() = if (mode == DataSourceMode.SUPABASE) supabaseStatsRepo else mockStatsRepo
+        get() = supabaseStatsRepo
 
     val submissionRepository: ISubmissionRepository
-        get() = if (mode == DataSourceMode.SUPABASE) supabaseSubmissionRepo else mockSubmissionRepo
+        get() = supabaseSubmissionRepo
 
     val likeRepository: ILikeRepository
-        get() = if (mode == DataSourceMode.SUPABASE) supabaseLikeRepo else mockLikeRepo
+        get() = supabaseLikeRepo
 
     val listenEventRepository: IListenEventRepository
-        get() = if (mode == DataSourceMode.SUPABASE) supabaseListenEventRepo else mockListenEventRepo
+        get() = supabaseListenEventRepo
 
     val announcementRepository: IAnnouncementRepository
-        get() = if (mode == DataSourceMode.SUPABASE) supabaseAnnouncementRepo else mockAnnouncementRepo
+        get() = supabaseAnnouncementRepo
 
     val competitionRepository: ICompetitionRepository
-        get() = if (mode == DataSourceMode.SUPABASE) supabaseCompetitionRepo else mockCompetitionRepo
+        get() = supabaseCompetitionRepo
 
     val rewardRepository: IRewardRepository
-        get() = if (mode == DataSourceMode.SUPABASE) supabaseRewardRepo else mockRewardRepo
+        get() = supabaseRewardRepo
 
-    val adminNotificationRepository: IAdminNotificationRepository
-        get() = mockNotificationRepo
+    val adminNotificationRepository: IAdminNotificationRepository by lazy {
+        MockAdminNotificationRepository()
+    }
 
-    val adminAuthRepository: IAdminAuthRepository
-        get() = mockAdminAuthRepo
+    val adminAuthRepository: IAdminAuthRepository by lazy {
+        MockAdminAuthRepository()
+    }
 
-    val adminRepository: IAdminRepository
-        get() = mockAdminRepo
+    val adminRepository: IAdminRepository by lazy {
+        MockAdminRepository(
+            reciterRepository = supabaseReciterRepo,
+            recitationRepository = supabaseRecitationRepo,
+            submissionRepository = supabaseSubmissionRepo,
+            announcementRepository = supabaseAnnouncementRepo,
+            competitionRepository = supabaseCompetitionRepo
+        )
+    }
 }
+

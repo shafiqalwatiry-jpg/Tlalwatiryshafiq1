@@ -1,6 +1,5 @@
 package com.tilawatak.data.remote.repository
 
-import com.tilawatak.data.mock.MockData
 import com.tilawatak.data.remote.SupabaseContracts
 import com.tilawatak.data.remote.dto.SupabaseDtoMappers
 import com.tilawatak.data.remote.http.SupabaseHttpClient
@@ -27,9 +26,7 @@ class SupabaseRewardRepository : IRewardRepository {
             for (i in 0 until jsonArray.length()) {
                 list.add(SupabaseDtoMappers.mapJsonToReward(jsonArray.getJSONObject(i)))
             }
-            if (list.isNotEmpty()) list else MockData.REWARDS
-        }.recoverCatching {
-            MockData.REWARDS
+            list
         }
     }
 
@@ -56,23 +53,27 @@ class SupabaseRewardRepository : IRewardRepository {
                 val reward = if (rewardObj != null) {
                     SupabaseDtoMappers.mapJsonToReward(rewardObj)
                 } else {
-                    MockData.REWARDS.first()
+                    RewardDefinition(
+                        id = obj.optString("reward_id", "reward_default"),
+                        nameArabic = "وسام التميز",
+                        nameEnglish = "Excellence Badge",
+                        description = "تكريم وتقدير للمشاركة المتميزة في المنصة",
+                        iconUrl = "",
+                        category = "HONOR"
+                    )
                 }
                 list.add(SupabaseDtoMappers.mapJsonToHonor(obj, reward))
             }
             if (reciterId.isNotBlank()) {
                 _honorsCache[reciterId] = list
             }
-            if (list.isNotEmpty()) list else {
-                if (reciterId.isNotBlank()) MockData.RECITER_HONORS.filter { it.reciterId == reciterId } else MockData.RECITER_HONORS
-            }
-        }.recoverCatching {
-            if (reciterId.isNotBlank()) MockData.RECITER_HONORS.filter { it.reciterId == reciterId } else MockData.RECITER_HONORS
+            list
         }
     }
 
     override fun getReciterHonorsStream(reciterId: String): Flow<List<ReciterHonor>> {
-        val list = _honorsCache[reciterId] ?: MockData.RECITER_HONORS.filter { it.reciterId == reciterId }
+        val list = _honorsCache[reciterId] ?: emptyList()
         return MutableStateFlow(list).asStateFlow()
     }
 }
+

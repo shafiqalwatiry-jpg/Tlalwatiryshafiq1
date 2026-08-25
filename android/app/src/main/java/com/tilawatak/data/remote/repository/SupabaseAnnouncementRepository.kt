@@ -1,25 +1,26 @@
 package com.tilawatak.data.remote.repository
 
-import com.tilawatak.data.mock.MockData
 import com.tilawatak.data.remote.SupabaseContracts
 import com.tilawatak.data.remote.dto.SupabaseDtoMappers
 import com.tilawatak.data.remote.http.SupabaseHttpClient
+import com.tilawatak.data.remote.sync.TilawatakSyncEngine
 import com.tilawatak.domain.model.Announcement
 import com.tilawatak.domain.repository.IAnnouncementRepository
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONArray
 
-class SupabaseAnnouncementRepository : IAnnouncementRepository {
-
-    private val _announcementsFlow = MutableStateFlow<List<Announcement>>(MockData.ANNOUNCEMENTS)
+class SupabaseAnnouncementRepository(
+    private val syncEngine: TilawatakSyncEngine = TilawatakSyncEngine.getInstance()
+) : IAnnouncementRepository {
 
     override fun getAnnouncementsStream(): Flow<List<Announcement>> {
-        return _announcementsFlow.asStateFlow()
+        return syncEngine.announcements
     }
 
     override suspend fun getPublishedAnnouncements(): Result<List<Announcement>> {
+        val cached = syncEngine.announcements.value
+        if (cached.isNotEmpty()) return Result.success(cached)
+
         val queryParams = mapOf(
             "select" to "*",
             "is_published" to "eq.true",
@@ -32,18 +33,14 @@ class SupabaseAnnouncementRepository : IAnnouncementRepository {
             for (i in 0 until jsonArray.length()) {
                 list.add(SupabaseDtoMappers.mapJsonToAnnouncement(jsonArray.getJSONObject(i)))
             }
-            if (list.isNotEmpty()) {
-                _announcementsFlow.value = list
-                list
-            } else {
-                MockData.ANNOUNCEMENTS
-            }
-        }.recoverCatching {
-            MockData.ANNOUNCEMENTS
+            list
         }
     }
 
     override suspend fun getAnnouncementById(id: String): Result<Announcement?> {
+        val cached = syncEngine.announcements.value.find { it.id == id }
+        if (cached != null) return Result.success(cached)
+
         val queryParams = mapOf(
             "select" to "*",
             "id" to "eq.$id",
@@ -55,10 +52,9 @@ class SupabaseAnnouncementRepository : IAnnouncementRepository {
             if (jsonArray.length() > 0) {
                 SupabaseDtoMappers.mapJsonToAnnouncement(jsonArray.getJSONObject(0))
             } else {
-                MockData.ANNOUNCEMENTS.find { it.id == id }
+                null
             }
-        }.recoverCatching {
-            MockData.ANNOUNCEMENTS.find { it.id == id }
         }
     }
 }
+

@@ -22,7 +22,8 @@ class MainActivity : ComponentActivity() {
     private val installationIdProvider by lazy { DefaultAnonymousInstallationIdProvider() }
     private val repositoryProvider by lazy {
         RepositoryProvider(
-            mode = SupabaseConfig.currentMode,
+            context = applicationContext,
+            mode = DataSourceMode.SUPABASE,
             installationIdProvider = installationIdProvider
         )
     }

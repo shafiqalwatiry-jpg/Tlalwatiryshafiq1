@@ -41,27 +41,115 @@ object SupabaseConfig {
     val storageBaseUrl: String
         get() = "$supabaseUrl/storage/v1"
 
-    fun getPublicAudioUrl(storagePath: String): String {
-        if (storagePath.startsWith("http://") || storagePath.startsWith("https://")) {
-            return storagePath
+    /**
+     * Convert Google Drive audio or image share links to direct streaming URLs
+     */
+    fun transformGoogleDriveUrl(url: String): String {
+        if (url.isBlank() || (!url.contains("drive.google.com") && !url.contains("docs.google.com"))) {
+            return url
         }
-        return "$storageBaseUrl/object/public/${SupabaseContracts.BUCKET_RECITATION_AUDIO}/$storagePath"
+        val fileIdRegex = Regex("""(?:/file/d/|[?&]id=)([a-zA-Z0-9_-]+)""")
+        val match = fileIdRegex.find(url)
+        val fileId = match?.groupValues?.getOrNull(1)
+        return if (!fileId.isNullOrBlank()) {
+            "https://docs.google.com/uc?export=download&id=$fileId"
+        } else {
+            url
+        }
+    }
+
+    fun isValidAudioUrl(url: String?): Boolean {
+        if (url.isNullOrBlank()) return false
+        val trimmed = url.trim()
+        if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://") && !trimmed.startsWith("blob:") && !trimmed.startsWith("file://")) {
+            return false
+        }
+        val lower = trimmed.toLowerCase()
+        if (lower.contains("supabase.com/dashboard") ||
+            lower.contains("google.com/search") ||
+            lower.contains("youtube.com/watch") ||
+            lower.contains("youtu.be") ||
+            lower.endsWith(".html") ||
+            lower.endsWith(".htm") ||
+            lower.endsWith(".php")
+        ) {
+            return false
+        }
+        return true
+    }
+
+    /**
+     * Resolves storage path to a complete public URL without duplicating bucket names.
+     */
+    fun getPublicStorageUrl(path: String?, defaultBucket: String): String {
+        if (path.isNullOrBlank()) return ""
+        val trimmed = path.trim()
+        if (trimmed.startsWith("http://") || trimmed.startsWith("https://") || trimmed.startsWith("blob:") || trimmed.startsWith("file://")) {
+            return trimmed
+        }
+        val cleanPath = if (trimmed.startsWith("/")) trimmed.substring(1) else trimmed
+        val parts = cleanPath.split("/").filter { it.isNotBlank() }
+        return if (parts.size >= 2) {
+            val bucket = parts[0]
+            val objPath = parts.subList(1, parts.size).joinToString("/")
+            "$storageBaseUrl/object/public/$bucket/$objPath"
+        } else {
+            "$storageBaseUrl/object/public/$defaultBucket/$cleanPath"
+        }
+    }
+
+    fun getPublicAudioUrl(storagePath: String?): String {
+        return getPublicStorageUrl(storagePath, SupabaseContracts.BUCKET_RECITATION_AUDIO)
     }
 
     fun getPublicCoverUrl(coverPath: String?): String? {
         if (coverPath.isNullOrBlank()) return null
-        if (coverPath.startsWith("http://") || coverPath.startsWith("https://")) {
-            return coverPath
-        }
-        return "$storageBaseUrl/object/public/${SupabaseContracts.BUCKET_RECITATION_COVERS}/$coverPath"
+        return getPublicStorageUrl(coverPath, SupabaseContracts.BUCKET_RECITATION_COVERS).ifBlank { null }
     }
 
     fun getPublicAvatarUrl(avatarPath: String?): String {
         if (avatarPath.isNullOrBlank()) return ""
-        if (avatarPath.startsWith("http://") || avatarPath.startsWith("https://")) {
-            return avatarPath
+        if (avatarPath.contains("drive.google.com") || avatarPath.contains("docs.google.com")) {
+            val fileIdRegex = Regex("""(?:/file/d/|[?&]id=)([a-zA-Z0-9_-]+)""")
+            val match = fileIdRegex.find(avatarPath)
+            val fileId = match?.groupValues?.getOrNull(1)
+            if (!fileId.isNullOrBlank()) {
+                return "https://lh3.googleusercontent.com/d/$fileId"
+            }
         }
-        return "$storageBaseUrl/object/public/${SupabaseContracts.BUCKET_PROFILE_IMAGES}/$avatarPath"
+        return getPublicStorageUrl(avatarPath, SupabaseContracts.BUCKET_PROFILE_IMAGES)
+    }
+
+    /**
+     * Resolves full audio URL following 3-step hierarchy:
+     * 1. external_audio_url
+     * 2. audio_storage_path
+     * 3. audio_url
+     */
+    fun resolveAudioUrl(
+        externalAudioUrl: String?,
+        audioStoragePath: String?,
+        directAudioUrl: String?
+    ): String {
+        if (!externalAudioUrl.isNullOrBlank()) {
+            val transformed = transformGoogleDriveUrl(externalAudioUrl.trim())
+            if (isValidAudioUrl(transformed)) {
+                return transformed
+            }
+        }
+        if (!audioStoragePath.isNullOrBlank()) {
+            val storageUrl = getPublicAudioUrl(audioStoragePath.trim())
+            if (isValidAudioUrl(storageUrl)) {
+                return storageUrl
+            }
+        }
+        if (!directAudioUrl.isNullOrBlank()) {
+            val transformed = transformGoogleDriveUrl(directAudioUrl.trim())
+            if (isValidAudioUrl(transformed)) {
+                return transformed
+            }
+        }
+        return ""
     }
 }
 

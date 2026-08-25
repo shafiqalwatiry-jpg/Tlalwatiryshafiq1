@@ -1,31 +1,26 @@
 package com.tilawatak.data.remote.repository
 
-import com.tilawatak.data.mock.MockData
 import com.tilawatak.data.remote.SupabaseContracts
 import com.tilawatak.data.remote.dto.SupabaseDtoMappers
 import com.tilawatak.data.remote.http.SupabaseHttpClient
+import com.tilawatak.data.remote.sync.TilawatakSyncEngine
 import com.tilawatak.domain.model.RecitationSubmission
 import com.tilawatak.domain.model.SubmissionStatus
 import com.tilawatak.domain.repository.ISubmissionRepository
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
-import org.json.JSONArray
 import java.util.UUID
 
-class SupabaseSubmissionRepository : ISubmissionRepository {
-
-    private val _userSubmissions = MutableStateFlow<List<RecitationSubmission>>(MockData.INITIAL_SUBMISSIONS)
+class SupabaseSubmissionRepository(
+    private val syncEngine: TilawatakSyncEngine = TilawatakSyncEngine.getInstance()
+) : ISubmissionRepository {
 
     override fun getUserSubmissions(): Flow<List<RecitationSubmission>> {
-        return _userSubmissions.asStateFlow()
+        return syncEngine.userSubmissions
     }
 
     /**
      * Submits a new recitation into Supabase recitation_submissions table.
      * Enforces PENDING status via database RLS and triggers.
-     * If audio file bytes/uri are provided, uploads to private submission-audio bucket.
      */
     override suspend fun submitRecitation(submission: RecitationSubmission): Result<RecitationSubmission> {
         val submissionId = if (submission.id.isNotBlank()) submission.id else UUID.randomUUID().toString()
@@ -42,7 +37,7 @@ class SupabaseSubmissionRepository : ISubmissionRepository {
             submittedAtEpochMs = System.currentTimeMillis()
         )
 
-        // Strategy 1: Call secure RPC submit_recitation_public (Bypasses table RLS via SECURITY DEFINER)
+        // Strategy 1: Call secure RPC submit_recitation_public
         val rpcPayload = org.json.JSONObject().apply {
             put("p_display_name", submissionToPersist.displayName)
             if (!submissionToPersist.pseudonym.isNullOrBlank()) {
@@ -77,11 +72,11 @@ class SupabaseSubmissionRepository : ISubmissionRepository {
             val jsonStr = rpcResult.getOrNull() ?: ""
             val createdId = jsonStr.replace("\"", "").trim()
             val finalSubmission = submissionToPersist.copy(id = if (createdId.isNotBlank()) createdId else submissionId)
-            _userSubmissions.update { current -> listOf(finalSubmission) + current }
+            syncEngine.addLocalSubmission(finalSubmission)
             return Result.success(finalSubmission)
         }
 
-        // Strategy 2: Direct REST POST with Prefer: return=minimal
+        // Strategy 2: Direct REST POST
         val jsonPayload = SupabaseDtoMappers.mapSubmissionToJson(submissionToPersist)
         val restResponse = SupabaseHttpClient.post(
             endpoint = SupabaseContracts.TABLE_SUBMISSIONS,
@@ -90,7 +85,7 @@ class SupabaseSubmissionRepository : ISubmissionRepository {
         )
 
         if (restResponse.isSuccess) {
-            _userSubmissions.update { current -> listOf(submissionToPersist) + current }
+            syncEngine.addLocalSubmission(submissionToPersist)
             return Result.success(submissionToPersist)
         }
 
@@ -134,3 +129,4 @@ class SupabaseSubmissionRepository : ISubmissionRepository {
         )
     }
 }
+
