@@ -103,4 +103,7 @@ dependencies {
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
     implementation(libs.androidx.hilt.navigation.compose)
+
+    // Biometric Authentication for Admin Panel
+    implementation("androidx.biometric:biometric:1.1.0")
 }

@@ -13,10 +13,12 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.biometric.BiometricPrompt
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -24,6 +26,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.tilawatak.notification.NotificationHelper
 import com.tilawatak.notification.WebAppInterface
+import java.util.concurrent.Executor
 
 class MainActivity : ComponentActivity() {
 
@@ -51,23 +54,17 @@ class MainActivity : ComponentActivity() {
 
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { _ ->
-        // Handle notification permission result gracefully
-    }
+    ) { _ -> }
 
     private val audioRecordingPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { _ ->
-        // Handle microphone recording permission result gracefully
-    }
+    ) { _ -> }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Ensure notification channel is created
         NotificationHelper.createNotificationChannel(this)
 
-        // Request runtime permissions on Android 13+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                 notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -78,7 +75,7 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            var webViewRef = remember { mutableStateOf<WebView?>(null) }
+            val webViewRef = remember { mutableStateOf<WebView?>(null) }
             val webAppUrl = "https://ais-pre-v4bcft7gk6bne67gjjl3vn-468976760695.europe-west2.run.app"
 
             BackHandler(enabled = true) {
@@ -95,6 +92,8 @@ class MainActivity : ComponentActivity() {
                 factory = { context ->
                     WebView(context).apply {
                         webViewRef.value = this
+                        WebView.setWebContentsDebuggingEnabled(true)
+
                         settings.apply {
                             javaScriptEnabled = true
                             domStorageEnabled = true
@@ -111,16 +110,62 @@ class MainActivity : ComponentActivity() {
                         CookieManager.getInstance().setAcceptCookie(true)
                         CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
 
-                        addJavascriptInterface(WebAppInterface(context), "AndroidBridge")
+                        val biometricExecutor: Executor = ContextCompat.getMainExecutor(context)
+                        val biometricPrompt = BiometricPrompt(this@MainActivity, biometricExecutor,
+                            object : BiometricPrompt.AuthenticationCallback() {
+                                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                                    super.onAuthenticationSucceeded(result)
+                                    // Notify Web via JavaScript bridge callback that biometric unlock succeeded
+                                    evaluateJavascript("window.dispatchEvent(new CustomEvent('android-biometric-success'));", null)
+                                }
+
+                                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                                    super.onAuthenticationError(errorCode, errString)
+                                    evaluateJavascript("window.dispatchEvent(new CustomEvent('android-biometric-error', {detail: '${errString}'}));", null)
+                                }
+
+                                override fun onAuthenticationFailed() {
+                                    super.onAuthenticationFailed()
+                                    Toast.makeText(context, "فشل التحقق بالبصمة", Toast.LENGTH_SHORT).show()
+                                }
+                            })
+
+                        val promptInfo = BiometricPrompt.PromptInfo.Builder()
+                            .setTitle("مصادقة لوحة الإدارة")
+                            .setSubtitle("استخدم بصمة الإصبع أو الوجه للتحقق من هويتك")
+                            .setNegativeButtonText("إلغاء")
+                            .build()
+
+                        addJavascriptInterface(
+                            WebAppInterface(context) {
+                                runOnUiThread {
+                                    try {
+                                        biometricPrompt.authenticate(promptInfo)
+                                    } catch (e: Exception) {
+                                        Toast.makeText(context, "المصادقة الحيوية غير متوفرة على هذا الجهاز", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            },
+                            "AndroidBridge"
+                        )
 
                         webViewClient = object : WebViewClient() {
                             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                                 val url = request?.url?.toString() ?: return false
-                                if (url.startsWith("http://") || url.startsWith("https://")) {
-                                    view?.loadUrl(url)
-                                    return true
+                                val uri = Uri.parse(url)
+                                val host = uri.host ?: ""
+                                // Allow same-domain navigation internally to preserve SPA state and prevent blank screen
+                                if (host.contains("europe-west2.run.app") || host.contains("tilawatak") || uri.scheme == "file") {
+                                    return false
                                 }
-                                return false
+                                // External links open in browser
+                                try {
+                                    val intent = Intent(Intent.ACTION_VIEW, uri)
+                                    view?.context?.startActivity(intent)
+                                    return true
+                                } catch (e: Exception) {
+                                    return false
+                                }
                             }
                         }
 
@@ -153,4 +198,3 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
-
