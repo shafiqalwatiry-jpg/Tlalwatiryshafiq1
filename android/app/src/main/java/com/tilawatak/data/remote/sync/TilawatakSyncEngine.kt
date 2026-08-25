@@ -168,7 +168,7 @@ class TilawatakSyncEngine private constructor(
 
             for (i in 0 until tombstonesArray.length()) {
                 val item = tombstonesArray.getJSONObject(i)
-                val table = item.optString("table", "").toLowerCase(Locale.US)
+                val table = item.optString("table", "").lowercase(Locale.US)
                 val id = item.optString("id", "")
                 when (table) {
                     "reciters" -> deletedReciters.add(id)

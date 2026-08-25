@@ -55,10 +55,10 @@ class SupabaseRewardRepository : IRewardRepository {
                 } else {
                     RewardDefinition(
                         id = obj.optString("reward_id", "reward_default"),
-                        nameArabic = "وسام التميز",
-                        nameEnglish = "Excellence Badge",
+                        code = "EXCELLENCE",
+                        title = "وسام التميز",
                         description = "تكريم وتقدير للمشاركة المتميزة في المنصة",
-                        iconUrl = "",
+                        iconPath = null,
                         category = "HONOR"
                     )
                 }

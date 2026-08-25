@@ -64,7 +64,7 @@ object SupabaseConfig {
         if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://") && !trimmed.startsWith("blob:") && !trimmed.startsWith("file://")) {
             return false
         }
-        val lower = trimmed.toLowerCase()
+        val lower = trimmed.lowercase(Locale.ROOT)
         if (lower.contains("supabase.com/dashboard") ||
             lower.contains("google.com/search") ||
             lower.contains("youtube.com/watch") ||
