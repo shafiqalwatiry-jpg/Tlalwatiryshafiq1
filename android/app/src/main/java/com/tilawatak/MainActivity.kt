@@ -90,11 +90,33 @@ class MainActivity : AppCompatActivity() {
         setContent {
             val webViewRef = remember { mutableStateOf<WebView?>(null) }
 
-            // Back button handling: navigate back inside WebView history first
+            // Back button handling: close web modal/dialog first if open, else navigate back in WebView history, else finish
             BackHandler(enabled = true) {
                 val wv = webViewRef.value
-                if (wv != null && wv.canGoBack()) {
-                    wv.goBack()
+                if (wv != null) {
+                    wv.evaluateJavascript(
+                        "(function() { " +
+                        "  var modal = document.querySelector('[role=\"dialog\"], .fixed.inset-0.z-50, .fixed.inset-0.z-\\[100\\]');" +
+                        "  if (modal) {" +
+                        "    var closeBtn = modal.querySelector('button[title*=\"إغلاق\"], button[aria-label*=\"إغلاق\"], button.absolute.top-4.left-4, button svg.lucide-x, .bg-white\\/10 svg.lucide-x, button:has(svg.lucide-x)');" +
+                        "    if (closeBtn) { closeBtn.click(); return 'closed_modal'; }" +
+                        "    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));" +
+                        "    return 'closed_modal';" +
+                        "  }" +
+                        "  return 'no_modal';" +
+                        "})()",
+                        ValueCallback { result ->
+                            if (result == null || !result.contains("closed_modal")) {
+                                runOnUiThread {
+                                    if (wv.canGoBack()) {
+                                        wv.goBack()
+                                    } else {
+                                        finish()
+                                    }
+                                }
+                            }
+                        }
+                    )
                 } else {
                     finish()
                 }
