@@ -121,7 +121,7 @@ class MainActivity : AppCompatActivity() {
                             displayZoomControls = false
                             useWideViewPort = true
                             loadWithOverviewMode = true
-                            setSupportMultipleWindows(false)
+                            setSupportMultipleWindows(true)
                         }
 
                         // Enable cross-site & Supabase cookies
@@ -248,11 +248,39 @@ class MainActivity : AppCompatActivity() {
                                 isUserGesture: Boolean,
                                 resultMsg: Message?
                             ): Boolean {
-                                val href = view?.handler?.obtainMessage()
-                                view?.requestFocusNodeHref(href)
-                                val url = href?.data?.getString("url")
-                                if (!url.isNullOrBlank()) {
-                                    view.loadUrl(url)
+                                val context = view?.context ?: return false
+                                val newWebView = WebView(context).apply {
+                                    settings.apply {
+                                        javaScriptEnabled = true
+                                        domStorageEnabled = true
+                                        databaseEnabled = true
+                                        allowFileAccess = true
+                                        allowContentAccess = true
+                                        mediaPlaybackRequiresUserGesture = false
+                                        mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                                    }
+                                    webViewClient = object : WebViewClient() {
+                                        override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                                            val url = request?.url?.toString() ?: return false
+                                            val uri = Uri.parse(url)
+                                            val scheme = uri.scheme?.lowercase() ?: ""
+                                            val host = uri.host?.lowercase() ?: ""
+                                            if (isInternalOrAuthUrl(host, scheme, url)) {
+                                                view?.loadUrl(url)
+                                            } else {
+                                                try {
+                                                    val intent = Intent(Intent.ACTION_VIEW, uri)
+                                                    context.startActivity(intent)
+                                                } catch (e: Exception) {}
+                                            }
+                                            return true
+                                        }
+                                    }
+                                }
+                                val transport = resultMsg?.obj as? WebView.WebViewTransport
+                                if (transport != null) {
+                                    transport.webView = newWebView
+                                    resultMsg.sendToTarget()
                                     return true
                                 }
                                 return false
