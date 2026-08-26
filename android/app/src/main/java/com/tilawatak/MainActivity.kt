@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Message
 import android.webkit.CookieManager
 import android.webkit.PermissionRequest
 import android.webkit.ValueCallback
@@ -15,10 +16,10 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Toast
-import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity
 import androidx.biometric.BiometricPrompt
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
@@ -29,7 +30,16 @@ import com.tilawatak.notification.NotificationHelper
 import com.tilawatak.notification.WebAppInterface
 import java.util.concurrent.Executor
 
+/**
+ * Production-Grade Android WebView Wrapper for Tilawatak LilAlam (تلاوتك للعالم).
+ * The Web version (https://tilawataklilalam.vercel.app/) is the Single Source of Truth.
+ */
 class MainActivity : AppCompatActivity() {
+
+    companion object {
+        const val WEB_PRODUCTION_URL = "https://tilawataklilalam.vercel.app/"
+        private const val PRIMARY_HOST = "tilawataklilalam.vercel.app"
+    }
 
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
 
@@ -64,8 +74,10 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // Initialize Android notification channel
         NotificationHelper.createNotificationChannel(this)
 
+        // Request runtime permissions on modern Android versions
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                 notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -77,8 +89,8 @@ class MainActivity : AppCompatActivity() {
 
         setContent {
             val webViewRef = remember { mutableStateOf<WebView?>(null) }
-            val webAppUrl = "https://ais-pre-v4bcft7gk6bne67gjjl3vn-468976760695.europe-west2.run.app"
 
+            // Back button handling: navigate back inside WebView history first
             BackHandler(enabled = true) {
                 val wv = webViewRef.value
                 if (wv != null && wv.canGoBack()) {
@@ -102,18 +114,22 @@ class MainActivity : AppCompatActivity() {
                             allowFileAccess = true
                             allowContentAccess = true
                             mediaPlaybackRequiresUserGesture = false
-                            mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                            mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                             cacheMode = WebSettings.LOAD_DEFAULT
                             setSupportZoom(false)
                             builtInZoomControls = false
                             displayZoomControls = false
                             useWideViewPort = true
                             loadWithOverviewMode = true
+                            setSupportMultipleWindows(false)
                         }
 
-                        CookieManager.getInstance().setAcceptCookie(true)
-                        CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+                        // Enable cross-site & Supabase cookies
+                        val cookieManager = CookieManager.getInstance()
+                        cookieManager.setAcceptCookie(true)
+                        cookieManager.setAcceptThirdPartyCookies(this, true)
 
+                        // Native Biometric Authentication for Web Admin Portal
                         val biometricExecutor: Executor = ContextCompat.getMainExecutor(context)
                         val biometricPrompt = BiometricPrompt(this@MainActivity, biometricExecutor,
                             object : BiometricPrompt.AuthenticationCallback() {
@@ -139,6 +155,7 @@ class MainActivity : AppCompatActivity() {
                             .setNegativeButtonText("إلغاء")
                             .build()
 
+                        // Android JS Bridge for Notifications & Biometric Authentication
                         addJavascriptInterface(
                             WebAppInterface(context) {
                                 runOnUiThread {
@@ -152,24 +169,42 @@ class MainActivity : AppCompatActivity() {
                             "AndroidBridge"
                         )
 
+                        // URL Navigation & Routing policy
                         webViewClient = object : WebViewClient() {
                             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                                 val url = request?.url?.toString() ?: return false
                                 val uri = Uri.parse(url)
-                                val host = uri.host ?: ""
-                                if (host.contains("europe-west2.run.app") || host.contains("tilawatak") || uri.scheme == "file" || host.isEmpty()) {
+                                val scheme = uri.scheme?.lowercase() ?: ""
+                                val host = uri.host?.lowercase() ?: ""
+
+                                // Keep internal & authentication URLs inside WebView
+                                if (isInternalOrAuthUrl(host, scheme, url)) {
                                     return false
                                 }
-                                try {
+
+                                // Handle special schemes (tel, mailto, whatsapp, intent)
+                                if (scheme == "tel" || scheme == "mailto" || scheme == "whatsapp" || scheme == "sms" || scheme == "market") {
+                                    return try {
+                                        val intent = Intent(Intent.ACTION_VIEW, uri)
+                                        view?.context?.startActivity(intent)
+                                        true
+                                    } catch (e: Exception) {
+                                        false
+                                    }
+                                }
+
+                                // External links (other domains) open in default external browser
+                                return try {
                                     val intent = Intent(Intent.ACTION_VIEW, uri)
                                     view?.context?.startActivity(intent)
-                                    return true
+                                    true
                                 } catch (e: Exception) {
-                                    return false
+                                    false
                                 }
                             }
                         }
 
+                        // WebChromeClient for File Chooser, Permissions & Audio recording
                         webChromeClient = object : WebChromeClient() {
                             override fun onPermissionRequest(request: PermissionRequest?) {
                                 request?.let {
@@ -196,21 +231,66 @@ class MainActivity : AppCompatActivity() {
 
                                 val intent = fileChooserParams?.createIntent() ?: Intent(Intent.ACTION_GET_CONTENT).apply {
                                     type = "*/*"
+                                    addCategory(Intent.CATEGORY_OPENABLE)
                                 }
-                                try {
+                                return try {
                                     fileChooserLauncher.launch(intent)
+                                    true
                                 } catch (e: Exception) {
                                     this@MainActivity.filePathCallback = null
-                                    return false
+                                    false
                                 }
-                                return true
+                            }
+
+                            override fun onCreateWindow(
+                                view: WebView?,
+                                isDialog: Boolean,
+                                isUserGesture: Boolean,
+                                resultMsg: Message?
+                            ): Boolean {
+                                val href = view?.handler?.obtainMessage()
+                                view?.requestFocusNodeHref(href)
+                                val url = href?.data?.getString("url")
+                                if (!url.isNullOrBlank()) {
+                                    view.loadUrl(url)
+                                    return true
+                                }
+                                return false
                             }
                         }
 
-                        loadUrl(webAppUrl)
+                        // Load the central Web Production URL
+                        loadUrl(WEB_PRODUCTION_URL)
                     }
                 }
             )
         }
     }
+
+    /**
+     * Checks if a URL should be loaded internally within the WebView.
+     * Prevents kicking the user out to Chrome on internal app navigation and Supabase/Google Auth redirects.
+     */
+    private fun isInternalOrAuthUrl(host: String, scheme: String, url: String): Boolean {
+        if (scheme == "file" || scheme == "data" || scheme == "blob" || scheme == "about") {
+            return true
+        }
+        if (host.isEmpty()) {
+            return true
+        }
+        // Main production domain & Vercel deployment aliases
+        if (host == PRIMARY_HOST || host.endsWith(".vercel.app") || host.contains("tilawatak")) {
+            return true
+        }
+        // Supabase Auth and Database services
+        if (host.endsWith(".supabase.co") || host == "supabase.co") {
+            return true
+        }
+        // Google OAuth login flows (accounts.google.com)
+        if (host.endsWith("accounts.google.com") || host.endsWith("accounts.youtube.com") || (host.endsWith("google.com") && url.contains("/oauth"))) {
+            return true
+        }
+        return false
+    }
 }
+
