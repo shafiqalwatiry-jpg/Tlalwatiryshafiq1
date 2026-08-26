@@ -1,6 +1,7 @@
 <resources>
-    <style name="Theme.TilawatakLilAlam" parent="android:Theme.Material.Light.NoActionBar">
+    <style name="Theme.TilawatakLilAlam" parent="Theme.AppCompat.DayNight.NoActionBar">
         <item name="android:statusBarColor">#0E1F18</item>
         <item name="android:navigationBarColor">#0A1611</item>
+        <item name="android:windowBackground">#0E1F18</item>
     </style>
 </resources>

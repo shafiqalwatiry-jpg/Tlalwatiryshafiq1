@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.webkit.CookieManager
+import android.webkit.PermissionRequest
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -100,11 +101,14 @@ class MainActivity : AppCompatActivity() {
                             databaseEnabled = true
                             allowFileAccess = true
                             allowContentAccess = true
+                            mediaPlaybackRequiresUserGesture = false
                             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                             cacheMode = WebSettings.LOAD_DEFAULT
-                            setSupportZoom(true)
+                            setSupportZoom(false)
                             builtInZoomControls = false
                             displayZoomControls = false
+                            useWideViewPort = true
+                            loadWithOverviewMode = true
                         }
 
                         CookieManager.getInstance().setAcceptCookie(true)
@@ -115,7 +119,6 @@ class MainActivity : AppCompatActivity() {
                             object : BiometricPrompt.AuthenticationCallback() {
                                 override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                                     super.onAuthenticationSucceeded(result)
-                                    // Notify Web via JavaScript bridge callback that biometric unlock succeeded
                                     evaluateJavascript("window.dispatchEvent(new CustomEvent('android-biometric-success'));", null)
                                 }
 
@@ -154,11 +157,9 @@ class MainActivity : AppCompatActivity() {
                                 val url = request?.url?.toString() ?: return false
                                 val uri = Uri.parse(url)
                                 val host = uri.host ?: ""
-                                // Allow same-domain navigation internally to preserve SPA state and prevent blank screen
-                                if (host.contains("europe-west2.run.app") || host.contains("tilawatak") || uri.scheme == "file") {
+                                if (host.contains("europe-west2.run.app") || host.contains("tilawatak") || uri.scheme == "file" || host.isEmpty()) {
                                     return false
                                 }
-                                // External links open in browser
                                 try {
                                     val intent = Intent(Intent.ACTION_VIEW, uri)
                                     view?.context?.startActivity(intent)
@@ -170,6 +171,21 @@ class MainActivity : AppCompatActivity() {
                         }
 
                         webChromeClient = object : WebChromeClient() {
+                            override fun onPermissionRequest(request: PermissionRequest?) {
+                                request?.let {
+                                    val resources = it.resources
+                                    val granted = resources.filter { res ->
+                                        res == PermissionRequest.RESOURCE_AUDIO_CAPTURE ||
+                                        res == PermissionRequest.RESOURCE_PROTECTED_MEDIA_ID
+                                    }.toTypedArray()
+                                    if (granted.isNotEmpty()) {
+                                        it.grant(granted)
+                                    } else {
+                                        it.deny()
+                                    }
+                                }
+                            }
+
                             override fun onShowFileChooser(
                                 webView: WebView?,
                                 filePathCallback: ValueCallback<Array<Uri>>?,
