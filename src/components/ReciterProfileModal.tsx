@@ -39,7 +39,9 @@ export const ReciterProfileModal: React.FC<ReciterProfileModalProps> = ({
 
   if (!reciter) return null;
 
-  const reciterRecitations = recitations.filter((r) => r.reciterId === reciter.id);
+  const reciterRecitations = recitations
+    .filter((r) => r.reciterId === reciter.id)
+    .sort((a, b) => (Number(a.surahNumber) || 1) - (Number(b.surahNumber) || 1));
 
   const handleShare = () => {
     if (navigator.share) {

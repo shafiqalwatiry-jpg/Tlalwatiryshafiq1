@@ -126,6 +126,11 @@ export class SyncEngine {
       setTimeout(() => {
         this.performBackgroundSync();
       }, 100);
+
+      // Periodic silent background refresh for live stats and counters (every 25 seconds)
+      setInterval(() => {
+        this.performBackgroundSync().catch(() => {});
+      }, 25000);
     }
   }
 
@@ -179,7 +184,7 @@ export class SyncEngine {
   }
 
   public getRecitations(): Recitation[] {
-    return [...this.recitations];
+    return [...this.recitations].sort((a, b) => (Number(a.surahNumber) || 1) - (Number(b.surahNumber) || 1));
   }
 
   public getCompetitions(): Competition[] {

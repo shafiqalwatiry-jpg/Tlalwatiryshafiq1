@@ -153,7 +153,7 @@ class SyncRecitationRepository implements IRecitationRepository {
     const all = syncEngine.getRecitations();
     return all
       .filter((r) => r.reciterId === reciterId)
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      .sort((a, b) => (Number(a.surahNumber) || 1) - (Number(b.surahNumber) || 1));
   }
 
   async toggleLike(recitationId: string, userId?: string): Promise<LikeResult> {
