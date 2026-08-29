@@ -49,6 +49,25 @@ export interface PostRequestDiagnostic {
   timestamp: string;
 }
 
+export interface AdminRecitationsFetchDiagnostic {
+  timestamp: string;
+  endpoint: string;
+  httpStatus: number | null;
+  statusText: string | null;
+  durationMs: number;
+  totalCount: number | null;
+  itemsReturned: number | null;
+  page: number;
+  pageSize: number;
+  filterApplied: {
+    reciterId?: string;
+    status?: string;
+    search?: string;
+  };
+  supabaseError?: string | null;
+  errorCode?: string | null;
+}
+
 const ADMIN_STORAGE_KEY = 'tilawatak_admin_session';
 
 class AdminServiceImpl {
@@ -63,12 +82,14 @@ class AdminServiceImpl {
   private postDiagnosticListeners: Set<(diag: PostRequestDiagnostic | null) => void> = new Set();
   private latestRpcDiagnostic: IsAdminRpcDiagnostic | null = null;
   private latestPostDiagnostic: PostRequestDiagnostic | null = null;
+  private latestRecitationsFetchDiagnostic: AdminRecitationsFetchDiagnostic | null = null;
 
   constructor() {
     this.restoreSession();
   }
 
   private restoreSession() {
+    if (typeof window === 'undefined' || !window.sessionStorage) return;
     try {
       const saved = sessionStorage.getItem(ADMIN_STORAGE_KEY);
       if (saved) {
@@ -92,13 +113,15 @@ class AdminServiceImpl {
       token,
       admin
     };
-    try {
-      sessionStorage.setItem(
-        ADMIN_STORAGE_KEY,
-        JSON.stringify({ token, admin })
-      );
-    } catch (e) {
-      console.warn('Failed to save admin session:', e);
+    if (typeof window !== 'undefined' && window.sessionStorage) {
+      try {
+        sessionStorage.setItem(
+          ADMIN_STORAGE_KEY,
+          JSON.stringify({ token, admin })
+        );
+      } catch (e) {
+        console.warn('Failed to save admin session:', e);
+      }
     }
     this.notifyListeners();
   }
@@ -109,10 +132,12 @@ class AdminServiceImpl {
       token: null,
       admin: null
     };
-    try {
-      sessionStorage.removeItem(ADMIN_STORAGE_KEY);
-    } catch (e) {
-      console.warn('Failed to clear admin session:', e);
+    if (typeof window !== 'undefined' && window.sessionStorage) {
+      try {
+        sessionStorage.removeItem(ADMIN_STORAGE_KEY);
+      } catch (e) {
+        console.warn('Failed to clear admin session:', e);
+      }
     }
     this.notifyListeners();
   }
@@ -488,8 +513,7 @@ class AdminServiceImpl {
           method: 'GET',
           headers: {
             ...authHeaders,
-            Prefer: 'count=exact',
-            Range: '0-0'
+            Prefer: 'count=exact'
           }
         });
         if (res.ok) {
@@ -999,6 +1023,10 @@ class AdminServiceImpl {
   // 5. RECITATIONS MANAGEMENT
   // ============================================================================
 
+  public getLatestRecitationsFetchDiagnostic(): AdminRecitationsFetchDiagnostic | null {
+    return this.latestRecitationsFetchDiagnostic;
+  }
+
   async getAdminRecitationsPaginated(options: {
     page?: number;
     pageSize?: number;
@@ -1016,9 +1044,8 @@ class AdminServiceImpl {
   }> {
     const authHeaders = this.getAuthHeaders();
     const page = Math.max(1, options.page || 1);
-    const pageSize = Math.max(1, Math.min(100, options.pageSize || 25));
+    const pageSize = Math.max(1, Math.min(100, options.pageSize || 24));
     const offset = (page - 1) * pageSize;
-    const to = offset + pageSize - 1;
 
     const queryParts: string[] = [];
     queryParts.push('select=*,reciters(display_name,pseudonym,country,profile_image_path)');
@@ -1043,17 +1070,19 @@ class AdminServiceImpl {
     }
 
     const queryString = queryParts.join('&');
+    const url = `${SUPABASE_CONFIG.restBaseUrl}/recitations?${queryString}`;
+    const startTime = Date.now();
 
     try {
-      const url = `${SUPABASE_CONFIG.restBaseUrl}/recitations?${queryString}`;
       const res = await fetch(url, {
+        method: 'GET',
         headers: {
           ...authHeaders,
-          Prefer: 'count=exact',
-          Range: `${offset}-${to}`,
-          'Range-Unit': 'items'
+          Prefer: 'count=exact'
         }
       });
+
+      const durationMs = Date.now() - startTime;
 
       if (res.ok) {
         const data = await res.json();
@@ -1067,6 +1096,25 @@ class AdminServiceImpl {
           }
         }
 
+        this.latestRecitationsFetchDiagnostic = {
+          timestamp: new Date().toISOString(),
+          endpoint: '/recitations',
+          httpStatus: res.status,
+          statusText: res.statusText,
+          durationMs,
+          totalCount,
+          itemsReturned: Array.isArray(data) ? data.length : 0,
+          page,
+          pageSize,
+          filterApplied: {
+            reciterId: options.reciterId,
+            status: options.status,
+            search: options.search
+          },
+          supabaseError: null,
+          errorCode: null
+        };
+
         return {
           data: Array.isArray(data) ? data : [],
           totalCount,
@@ -1074,94 +1122,79 @@ class AdminServiceImpl {
           pageSize,
           totalPages: Math.ceil(totalCount / pageSize) || 1
         };
-      }
-    } catch (e) {
-      console.warn('Paginated fetch from /recitations failed, trying fallback:', e);
-    }
+      } else {
+        const errorText = await res.text().catch(() => '');
+        let errMessage = res.statusText || 'Fetch error';
+        let errCode: string | null = null;
+        try {
+          const parsed = JSON.parse(errorText);
+          if (parsed.message) errMessage = parsed.message;
+          if (parsed.code) errCode = parsed.code;
+        } catch {}
 
-    // Fallback query to public_recitations_view
-    try {
-      const viewParts: string[] = [
-        'select=*',
-        `limit=${pageSize}`,
-        `offset=${offset}`,
-        `order=published_at.${sortDir}`
-      ];
-      if (options.reciterId && options.reciterId !== 'all') {
-        viewParts.push(`reciter_id=eq.${encodeURIComponent(options.reciterId)}`);
-      }
-      if (options.search && options.search.trim()) {
-        const q = encodeURIComponent(`*${options.search.trim()}*`);
-        viewParts.push(`or=(surah_name.ilike.${q},riwayah.ilike.${q})`);
-      }
-      const viewUrl = `${SUPABASE_CONFIG.restBaseUrl}/public_recitations_view?${viewParts.join('&')}`;
-      const viewRes = await fetch(viewUrl, {
-        headers: {
-          ...authHeaders,
-          Prefer: 'count=exact',
-          Range: `${offset}-${to}`,
-          'Range-Unit': 'items'
-        }
-      });
-      if (viewRes.ok) {
-        const viewData = await viewRes.json();
-        let totalCount = Array.isArray(viewData) ? viewData.length : 0;
-        const cr = viewRes.headers.get('content-range');
-        if (cr && cr.includes('/')) {
-          const totalStr = cr.split('/')[1];
-          if (totalStr && totalStr !== '*') {
-            const parsed = parseInt(totalStr, 10);
-            if (!isNaN(parsed)) totalCount = parsed;
-          }
-        }
-
-        return {
-          data: Array.isArray(viewData) ? viewData : [],
-          totalCount,
+        this.latestRecitationsFetchDiagnostic = {
+          timestamp: new Date().toISOString(),
+          endpoint: '/recitations',
+          httpStatus: res.status,
+          statusText: res.statusText,
+          durationMs,
+          totalCount: null,
+          itemsReturned: null,
           page,
           pageSize,
-          totalPages: Math.ceil(totalCount / pageSize) || 1
+          filterApplied: {
+            reciterId: options.reciterId,
+            status: options.status,
+            search: options.search
+          },
+          supabaseError: errMessage,
+          errorCode: errCode
+        };
+
+        throw new Error(`فشل استرجاع التلاوات من قاعدة البيانات (${res.status} ${res.statusText}): ${errMessage}`);
+      }
+    } catch (e: any) {
+      const durationMs = Date.now() - startTime;
+      if (!this.latestRecitationsFetchDiagnostic || this.latestRecitationsFetchDiagnostic.timestamp !== new Date().toISOString()) {
+        this.latestRecitationsFetchDiagnostic = {
+          timestamp: new Date().toISOString(),
+          endpoint: '/recitations',
+          httpStatus: null,
+          statusText: 'Network / Connection Error',
+          durationMs,
+          totalCount: null,
+          itemsReturned: null,
+          page,
+          pageSize,
+          filterApplied: {
+            reciterId: options.reciterId,
+            status: options.status,
+            search: options.search
+          },
+          supabaseError: e.message || 'Connection failure',
+          errorCode: 'FETCH_FAILED'
         };
       }
-    } catch {}
-
-    return {
-      data: [],
-      totalCount: 0,
-      page,
-      pageSize,
-      totalPages: 1
-    };
+      throw e;
+    }
   }
 
   async getAllAdminRecitations(reciterId?: string): Promise<any[]> {
     const authHeaders = this.getAuthHeaders();
-    try {
-      let url = `${SUPABASE_CONFIG.restBaseUrl}/recitations?select=*,reciters(display_name,pseudonym,country,profile_image_path)&order=created_at.desc`;
-      if (reciterId) {
-        url += `&reciter_id=eq.${encodeURIComponent(reciterId)}`;
-      }
-      const res = await fetch(url, { headers: authHeaders });
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data)) return data;
-      }
-    } catch (e) {
-      console.warn('Direct fetch from /recitations failed, falling back to public_recitations_view:', e);
+    let url = `${SUPABASE_CONFIG.restBaseUrl}/recitations?select=*,reciters(display_name,pseudonym,country,profile_image_path)&order=created_at.desc`;
+    if (reciterId && reciterId !== 'all') {
+      url += `&reciter_id=eq.${encodeURIComponent(reciterId)}`;
     }
-
-    try {
-      let viewUrl = `${SUPABASE_CONFIG.restBaseUrl}/public_recitations_view?select=*&order=published_at.desc`;
-      if (reciterId) {
-        viewUrl += `&reciter_id=eq.${encodeURIComponent(reciterId)}`;
-      }
-      const viewRes = await fetch(viewUrl, { headers: authHeaders });
-      if (viewRes.ok) {
-        const viewData = await viewRes.json();
-        if (Array.isArray(viewData)) return viewData;
-      }
-    } catch {
-      // ignore
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: authHeaders
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data)) return data;
+    } else {
+      const errText = await res.text().catch(() => '');
+      throw new Error(`فشل جلب جميع التلاوات (${res.status}): ${errText}`);
     }
     return [];
   }
@@ -1321,6 +1354,94 @@ class AdminServiceImpl {
         `Failed to delete recitation (HTTP ${res.status})`;
       throw new Error(errorMsg);
     }
+  }
+
+  /**
+   * Smart Bulk Recitations Publication Toggle (Server-Side atomic update)
+   * Only targets records strictly matching the supplied filters.
+   */
+  async bulkToggleRecitationsPublication(params: {
+    action: 'PUBLISH' | 'UNPUBLISH';
+    reciterId?: string;
+    status?: string;
+    search?: string;
+  }): Promise<{ updatedCount: number; action: string }> {
+    const isPublish = params.action === 'PUBLISH';
+    const reciterId = params.reciterId && params.reciterId !== 'all' ? params.reciterId : null;
+    const currentStatus = params.status && params.status !== 'all' ? params.status.toUpperCase() : null;
+    const search = params.search?.trim() || null;
+
+    // Strategy 1: Call secure RPC admin_bulk_toggle_recitations
+    try {
+      const rpcRes = await fetch(`${SUPABASE_CONFIG.restBaseUrl}/rpc/admin_bulk_toggle_recitations`, {
+        method: 'POST',
+        headers: this.getAuthHeaders(),
+        body: JSON.stringify({
+          p_action: params.action,
+          p_reciter_id: reciterId,
+          p_current_status: currentStatus,
+          p_search: search
+        })
+      });
+
+      if (rpcRes.ok) {
+        const data = await rpcRes.json();
+        return {
+          updatedCount: Number(data?.updated_count ?? 0),
+          action: params.action
+        };
+      }
+    } catch (e) {
+      console.warn('RPC admin_bulk_toggle_recitations bypassed, using REST fallback:', e);
+    }
+
+    // Strategy 2: Single Server-Side PostgREST PATCH with exact filter criteria
+    const queryParts: string[] = [];
+    if (reciterId) {
+      queryParts.push(`reciter_id=eq.${encodeURIComponent(reciterId)}`);
+    }
+    if (currentStatus) {
+      queryParts.push(`status=eq.${encodeURIComponent(currentStatus)}`);
+    }
+    if (search) {
+      const q = encodeURIComponent(`*${search}*`);
+      queryParts.push(`or=(surah_name.ilike.${q},riwayah.ilike.${q})`);
+    }
+
+    const payload: Record<string, any> = {
+      status: isPublish ? 'APPROVED' : 'PENDING',
+      is_published: isPublish,
+      updated_at: new Date().toISOString()
+    };
+    if (isPublish) {
+      payload.published_at = new Date().toISOString();
+    }
+
+    const url = `${SUPABASE_CONFIG.restBaseUrl}/recitations${queryParts.length > 0 ? `?${queryParts.join('&')}` : ''}`;
+    const res = await fetch(url, {
+      method: 'PATCH',
+      headers: {
+        ...this.getAuthHeaders(),
+        Prefer: 'return=representation'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!res.ok) {
+      let errBody: any = null;
+      try {
+        errBody = await res.json();
+      } catch {
+        errBody = await res.text().catch(() => null);
+      }
+      throw new Error(errBody?.message || `Failed to bulk update recitations (${res.status})`);
+    }
+
+    const updatedRows = await res.json().catch(() => []);
+    return {
+      updatedCount: Array.isArray(updatedRows) ? updatedRows.length : 0,
+      action: params.action
+    };
   }
 
 

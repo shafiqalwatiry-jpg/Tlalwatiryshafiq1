@@ -105,6 +105,8 @@ export class SyncEngine {
   private isSyncing: boolean = false;
   private syncPromise: Promise<void> | null = null;
   private realtimeChannel: RealtimeChannel | null = null;
+  private realtimeRetryTimer: any = null;
+  private isClosingRealtimeChannel: boolean = false;
 
   // Observers / Listeners for reactive updates
   private reciterListeners: Set<(reciters: Reciter[]) => void> = new Set();
@@ -745,13 +747,23 @@ export class SyncEngine {
   // 5. SUPABASE REALTIME INTEGRATION (Live In-App Updates)
   // --------------------------------------------------------------------------
   public initRealtimeSubscriptions(): void {
+    if (this.realtimeRetryTimer) {
+      clearTimeout(this.realtimeRetryTimer);
+      this.realtimeRetryTimer = null;
+    }
+
     try {
       if (this.realtimeChannel) {
-        supabase.removeChannel(this.realtimeChannel);
+        this.isClosingRealtimeChannel = true;
+        try {
+          supabase.removeChannel(this.realtimeChannel);
+        } catch {}
+        this.realtimeChannel = null;
+        this.isClosingRealtimeChannel = false;
       }
 
-      this.realtimeChannel = supabase
-        .channel('realtime:tilawatak_public_sync')
+      const channel = supabase
+        .channel('tilawatak_public_sync')
         // 1. Reciters Realtime changes
         .on(
           'postgres_changes',
@@ -792,16 +804,32 @@ export class SyncEngine {
             this.handleHonorRealtimeChange(payload);
           }
         )
-        .subscribe((status) => {
+        .subscribe((status, err) => {
           if (status === 'SUBSCRIBED') {
             console.log('[SyncEngine] Supabase Realtime channel connected.');
-          } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-            console.warn(`[SyncEngine] Realtime channel status: ${status}, retrying in 5s...`);
-            setTimeout(() => {
-              this.initRealtimeSubscriptions();
-            }, 5000);
+            if (this.realtimeRetryTimer) {
+              clearTimeout(this.realtimeRetryTimer);
+              this.realtimeRetryTimer = null;
+            }
+          } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+            console.warn(`[SyncEngine] Realtime channel status: ${status}`, err || '');
+            if (!this.realtimeRetryTimer) {
+              this.realtimeRetryTimer = setTimeout(() => {
+                this.realtimeRetryTimer = null;
+                this.initRealtimeSubscriptions();
+              }, 5000);
+            }
+          } else if (status === 'CLOSED') {
+            if (!this.isClosingRealtimeChannel && !this.realtimeRetryTimer) {
+              this.realtimeRetryTimer = setTimeout(() => {
+                this.realtimeRetryTimer = null;
+                this.initRealtimeSubscriptions();
+              }, 5000);
+            }
           }
         });
+
+      this.realtimeChannel = channel;
     } catch (e) {
       console.warn('[SyncEngine] Failed to connect Supabase Realtime channel:', e);
     }

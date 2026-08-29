@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { adminService } from '../../services/AdminService';
 import { SupabaseService } from '../../services/SupabaseService';
+import { syncEngine } from '../../services/SyncEngine';
 import { SURAH_LIST, RIWAYAT_OPTIONS } from '../../data/quranSurahs';
 import {
   Music,
@@ -23,13 +24,16 @@ import {
   Upload,
   FileAudio,
   ChevronRight,
-  ChevronLeft
+  ChevronLeft,
+  Sliders,
+  CheckCheck
 } from 'lucide-react';
 
 export function AdminRecitationsView() {
   const [recitations, setRecitations] = useState<any[]>([]);
   const [reciters, setReciters] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [totalCount, setTotalCount] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
   const [currentPage, setCurrentPage] = useState(1);
@@ -42,6 +46,12 @@ export function AdminRecitationsView() {
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingRecitation, setEditingRecitation] = useState<any | null>(null);
+
+  // Smart Bulk Toggle State
+  const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
+  const [isBulkOperating, setIsBulkOperating] = useState(false);
+  const [bulkSuccessMessage, setBulkSuccessMessage] = useState<string | null>(null);
+  const [bulkErrorMessage, setBulkErrorMessage] = useState<string | null>(null);
 
   // Form State
   const [reciterId, setReciterId] = useState('');
@@ -86,6 +96,7 @@ export function AdminRecitationsView() {
 
   const loadData = useCallback(async (showLoading = true) => {
     if (showLoading) setIsLoading(true);
+    setFetchError(null);
     try {
       const result = await adminService.getAdminRecitationsPaginated({
         page: currentPage,
@@ -100,8 +111,10 @@ export function AdminRecitationsView() {
       setRecitations(result.data);
       setTotalCount(result.totalCount);
       setTotalPages(result.totalPages);
-    } catch (e) {
+      setFetchError(null);
+    } catch (e: any) {
       console.error('Failed to load paginated recitations:', e);
+      setFetchError(e.message || 'فشل جلب التلاوات من خادم Supabase');
     } finally {
       setIsLoading(false);
     }
@@ -384,6 +397,66 @@ export function AdminRecitationsView() {
     }
   };
 
+  // Determine smart bulk toggle action based on current active filter
+  const hasUnpublishedInView = recitations.some(
+    (r) => r.status !== 'APPROVED' || r.is_published === false
+  );
+
+  let smartAction: 'PUBLISH' | 'UNPUBLISH' = 'PUBLISH';
+  if (statusFilter === 'APPROVED') {
+    smartAction = 'UNPUBLISH';
+  } else if (statusFilter === 'PENDING' || statusFilter === 'REJECTED') {
+    smartAction = 'PUBLISH';
+  } else {
+    smartAction = hasUnpublishedInView || recitations.length === 0 ? 'PUBLISH' : 'UNPUBLISH';
+  }
+
+  const selectedReciterObj = reciters.find((r) => r.id === selectedReciterFilter);
+
+  const handleExecuteBulkAction = async () => {
+    setIsBulkOperating(true);
+    setBulkErrorMessage(null);
+    setBulkSuccessMessage(null);
+
+    try {
+      const result = await adminService.bulkToggleRecitationsPublication({
+        action: smartAction,
+        reciterId: selectedReciterFilter === 'all' ? undefined : selectedReciterFilter,
+        status: statusFilter === 'all' ? undefined : statusFilter,
+        search: debouncedSearch || undefined
+      });
+
+      const count = result.updatedCount;
+      const actionText = smartAction === 'PUBLISH' ? 'نشر' : 'إيقاف نشر';
+      setBulkSuccessMessage(`تم بنجاح ${actionText} ${count.toLocaleString('ar-EG')} تلاوة وتحديث قاعدة البيانات مباشرة.`);
+
+      // Optimistic update of local page items
+      setRecitations((prev) =>
+        prev.map((r) => ({
+          ...r,
+          status: smartAction === 'PUBLISH' ? 'APPROVED' : 'PENDING',
+          is_published: smartAction === 'PUBLISH'
+        }))
+      );
+
+      // Trigger background sync across engine and reload without flash
+      syncEngine.performBackgroundSync(true).catch(() => {});
+      setTimeout(() => {
+        loadData(false);
+      }, 300);
+
+      // Close modal smoothly after confirmation
+      setTimeout(() => {
+        setIsBulkModalOpen(false);
+        setBulkSuccessMessage(null);
+      }, 1500);
+    } catch (e: any) {
+      setBulkErrorMessage(e.message || 'حدث خطأ أثناء تنفيذ عملية التحديث الجماعي');
+    } finally {
+      setIsBulkOperating(false);
+    }
+  };
+
   return (
     <div className="space-y-6 select-none font-tajawal">
       {/* Header */}
@@ -398,7 +471,41 @@ export function AdminRecitationsView() {
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Smart Bulk Action Button */}
+          {totalCount > 0 && (
+            <button
+              onClick={() => {
+                setBulkSuccessMessage(null);
+                setBulkErrorMessage(null);
+                setIsBulkModalOpen(true);
+              }}
+              disabled={isLoading || isBulkOperating}
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow-sm border ${
+                smartAction === 'PUBLISH'
+                  ? 'bg-[#183D2D] hover:bg-[#20523C] border-[#2E6B4F] text-emerald-200'
+                  : 'bg-[#3D2518] hover:bg-[#523120] border-[#6B422B] text-amber-200'
+              }`}
+              title={
+                smartAction === 'PUBLISH'
+                  ? 'نشر جميع التلاوات المطابقة للتصفية الحالية'
+                  : 'إيقاف نشر جميع التلاوات المطابقة للتصفية الحالية'
+              }
+            >
+              {smartAction === 'PUBLISH' ? (
+                <>
+                  <Eye className="w-4 h-4 text-emerald-400" />
+                  <span>نشر التلاوات ({totalCount.toLocaleString('ar-EG')})</span>
+                </>
+              ) : (
+                <>
+                  <EyeOff className="w-4 h-4 text-amber-400" />
+                  <span>إيقاف النشر ({totalCount.toLocaleString('ar-EG')})</span>
+                </>
+              )}
+            </button>
+          )}
+
           <button
             onClick={() => loadData(true)}
             disabled={isLoading}
@@ -497,6 +604,25 @@ export function AdminRecitationsView() {
         <div className="py-16 text-center space-y-3">
           <div className="w-8 h-8 border-2 border-[#60A5FA]/30 border-t-[#60A5FA] rounded-full animate-spin mx-auto"></div>
           <p className="text-xs text-[#8BA496]">جاري تحميل مكتبة التلاوات...</p>
+        </div>
+      ) : fetchError ? (
+        <div className="py-12 px-6 bg-[#2B1818]/60 border border-red-900/50 rounded-2xl text-center space-y-3">
+          <div className="w-12 h-12 rounded-full bg-red-950/80 border border-red-800 flex items-center justify-center mx-auto text-red-400">
+            <AlertCircle className="w-6 h-6" />
+          </div>
+          <h3 className="text-base font-bold text-red-200">تعذر جلب التلاوات من خادم Supabase</h3>
+          <p className="text-xs text-red-300/80 max-w-md mx-auto dir-ltr font-mono text-left bg-black/40 p-2.5 rounded-lg border border-red-900/40">
+            {fetchError}
+          </p>
+          <div className="pt-2">
+            <button
+              onClick={() => loadData(true)}
+              className="px-4 py-2 bg-red-800/80 hover:bg-red-700 text-white rounded-xl text-xs font-bold inline-flex items-center gap-1.5 transition"
+            >
+              <RefreshCw className="w-4 h-4" />
+              <span>إعادة المحاولة الآن</span>
+            </button>
+          </div>
         </div>
       ) : recitations.length === 0 ? (
         <div className="py-16 px-4 bg-[#14241D]/50 border border-dashed border-[#234235] rounded-2xl text-center space-y-3">
@@ -931,6 +1057,144 @@ export function AdminRecitationsView() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Smart Bulk Action Confirmation Modal */}
+      {isBulkModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-[#122019] border border-[#234235] rounded-2xl max-w-lg w-full p-6 space-y-5 shadow-2xl text-right">
+            <div className="flex items-center justify-between pb-3 border-b border-[#234235]">
+              <h2 className="text-lg font-bold font-amiri text-[#F0F5F2] flex items-center gap-2">
+                {smartAction === 'PUBLISH' ? (
+                  <Eye className="w-5 h-5 text-emerald-400" />
+                ) : (
+                  <EyeOff className="w-5 h-5 text-amber-400" />
+                )}
+                <span>
+                  {smartAction === 'PUBLISH'
+                    ? 'تأكيد نشر التلاوات جماعيًا'
+                    : 'تأكيد إيقاف نشر التلاوات جماعيًا'}
+                </span>
+              </h2>
+
+              <span
+                className={`px-2.5 py-1 text-xs font-bold rounded-lg border ${
+                  smartAction === 'PUBLISH'
+                    ? 'bg-emerald-950/70 border-emerald-800 text-emerald-300'
+                    : 'bg-amber-950/70 border-amber-800 text-amber-300'
+                }`}
+              >
+                {smartAction === 'PUBLISH' ? 'نشر في التطبيق' : 'إخفاء عن المستخدمين'}
+              </span>
+            </div>
+
+            {bulkSuccessMessage ? (
+              <div className="p-4 bg-emerald-950/40 border border-emerald-800/80 rounded-xl text-emerald-200 text-xs flex items-center gap-2">
+                <CheckCheck className="w-5 h-5 shrink-0 text-emerald-400" />
+                <span>{bulkSuccessMessage}</span>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <p className="text-xs text-[#A8C2B3] leading-relaxed">
+                  أنت على وشك تنفيذ عملية {smartAction === 'PUBLISH' ? 'نشر عام' : 'إيقاف نشر'}{' '}
+                  للتلاوات المطابقة للتصفية الحالية مباشرة على الخادم دون حذف أي ملفات.
+                </p>
+
+                {/* Filter Scope Summary Box */}
+                <div className="bg-[#0D1813] border border-[#1F372C] rounded-xl p-3.5 space-y-2 text-xs">
+                  <div className="text-[#8BA496] font-semibold border-b border-[#1F372C] pb-1.5 flex items-center justify-between">
+                    <span>نطاق التصفية المطبق:</span>
+                    <span className="text-[#60A5FA] font-bold">
+                      {totalCount.toLocaleString('ar-EG')} تلاوة مطابقة
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 text-[11px] text-[#A8C2B3]">
+                    <div>
+                      <span className="text-[#5A7B6C]">القارئ: </span>
+                      <span className="text-white font-medium">
+                        {selectedReciterObj
+                          ? selectedReciterObj.display_name || selectedReciterObj.pseudonym || 'قارئ محدد'
+                          : 'كافة القراء'}
+                      </span>
+                    </div>
+
+                    <div>
+                      <span className="text-[#5A7B6C]">حالة الفلتر: </span>
+                      <span className="text-white font-medium">
+                        {statusFilter === 'all'
+                          ? 'جميع الحالات'
+                          : statusFilter === 'APPROVED'
+                          ? 'المعتمدة والمنشورة'
+                          : statusFilter === 'PENDING'
+                          ? 'قيد المراجعة'
+                          : 'المرفوضة'}
+                      </span>
+                    </div>
+
+                    {debouncedSearch && (
+                      <div className="col-span-2">
+                        <span className="text-[#5A7B6C]">كلمة البحث: </span>
+                        <span className="text-[#D4AF37] font-medium">"{debouncedSearch}"</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {bulkErrorMessage && (
+                  <div className="p-3 bg-rose-950/40 border border-rose-800 rounded-xl text-rose-200 text-xs flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+                    <span>{bulkErrorMessage}</span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-[#234235]">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsBulkModalOpen(false);
+                  setBulkSuccessMessage(null);
+                  setBulkErrorMessage(null);
+                }}
+                disabled={isBulkOperating}
+                className="px-4 py-2 bg-[#1A3328] hover:bg-[#224435] text-[#A8C2B3] rounded-xl font-semibold text-xs transition"
+              >
+                إلغاء
+              </button>
+
+              {!bulkSuccessMessage && (
+                <button
+                  type="button"
+                  onClick={handleExecuteBulkAction}
+                  disabled={isBulkOperating}
+                  className={`px-5 py-2 rounded-xl font-bold text-xs flex items-center gap-2 transition shadow-sm ${
+                    smartAction === 'PUBLISH'
+                      ? 'bg-[#2B5742] hover:bg-[#346950] text-white'
+                      : 'bg-[#5C3218] hover:bg-[#733F1F] text-white'
+                  } disabled:opacity-50`}
+                >
+                  {isBulkOperating ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                      <span>جاري المعالجة...</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle className="w-4 h-4" />
+                      <span>
+                        {smartAction === 'PUBLISH'
+                          ? `تأكيد نشر (${totalCount.toLocaleString('ar-EG')}) تلاوة`
+                          : `تأكيد إيقاف نشر (${totalCount.toLocaleString('ar-EG')}) تلاوة`}
+                      </span>
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}
