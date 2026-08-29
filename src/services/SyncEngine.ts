@@ -122,10 +122,12 @@ export class SyncEngine {
     if (typeof window !== 'undefined') {
       this.initRealtimeSubscriptions();
       this.initLifecycleListeners();
-      // Trigger background sync immediately after startup
+      
+      // On startup, if local cache is empty or on cold boot, trigger full sync immediately
+      const isColdStart = !this.recitations.length || !this.reciters.length;
       setTimeout(() => {
-        this.performBackgroundSync();
-      }, 100);
+        this.performBackgroundSync(isColdStart);
+      }, 50);
 
       // Periodic silent background refresh for live stats and counters (every 25 seconds)
       setInterval(() => {
@@ -362,7 +364,8 @@ export class SyncEngine {
       this.isSyncing = true;
       this.notifySyncState();
 
-      const lastSync = forceFull ? null : this.metadata.lastSyncTimestamp;
+      const isCacheEmpty = !this.recitations.length || !this.reciters.length;
+      const lastSync = (forceFull || isCacheEmpty) ? null : this.metadata.lastSyncTimestamp;
       const installId = userService.getInstallationId();
 
       try {
@@ -387,7 +390,7 @@ export class SyncEngine {
         }
 
         // Step C: Strategy 2 - Direct REST Incremental / Full Sync Fallback
-        if (!diffSucceeded) {
+        if (!diffSucceeded || (isCacheEmpty && !this.recitations.length)) {
           await this.performRestIncrementalSync(lastSync, installId);
         }
 
@@ -741,7 +744,7 @@ export class SyncEngine {
   // --------------------------------------------------------------------------
   // 5. SUPABASE REALTIME INTEGRATION (Live In-App Updates)
   // --------------------------------------------------------------------------
-  private initRealtimeSubscriptions(): void {
+  public initRealtimeSubscriptions(): void {
     try {
       if (this.realtimeChannel) {
         supabase.removeChannel(this.realtimeChannel);
@@ -792,6 +795,11 @@ export class SyncEngine {
         .subscribe((status) => {
           if (status === 'SUBSCRIBED') {
             console.log('[SyncEngine] Supabase Realtime channel connected.');
+          } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+            console.warn(`[SyncEngine] Realtime channel status: ${status}, retrying in 5s...`);
+            setTimeout(() => {
+              this.initRealtimeSubscriptions();
+            }, 5000);
           }
         });
     } catch (e) {
@@ -848,16 +856,47 @@ export class SyncEngine {
     const { eventType, new: newRow, old: oldRow } = payload;
     let changed = false;
 
+    const isRowApproved = (row: any) =>
+      row &&
+      row.status === 'APPROVED' &&
+      (row.is_published === undefined || row.is_published === null || row.is_published === true);
+
     if (eventType === 'INSERT') {
-      if (newRow && newRow.status === 'APPROVED') {
+      if (isRowApproved(newRow)) {
         const mapped = this.mapRawRecitation(newRow);
         this.recitations = [mapped, ...this.recitations.filter((r) => r.id !== mapped.id)];
         changed = true;
+
+        // If reciter is not yet in cache (e.g. newly approved submission with new reciter), fetch reciters
+        if (!this.reciters.some((r) => r.id === newRow.reciter_id)) {
+          SupabaseService.fetchPublicReciters().then((raw) => {
+            if (Array.isArray(raw) && raw.length > 0) {
+              this.reciters = raw.map((d: any) => this.mapRawReciter(d));
+              SyncStorage.set(KEYS.RECITERS, this.reciters);
+              this.notifyReciters();
+              // Re-map recitations to bind fresh reciter names
+              this.recitations = this.recitations.map((rec) => {
+                const recRaw = {
+                  ...rec,
+                  reciter_id: rec.reciterId,
+                  surah_number: rec.surahNumber,
+                  surah_name: rec.surahNameArabic,
+                  audio_storage_path: rec.audioUrl,
+                  duration_seconds: rec.duration,
+                  published_at: rec.createdAt
+                };
+                return this.mapRawRecitation(recRaw);
+              });
+              SyncStorage.set(KEYS.RECITATIONS, this.recitations);
+              this.notifyRecitations();
+            }
+          }).catch(() => {});
+        }
       }
     } else if (eventType === 'UPDATE') {
       if (newRow) {
-        if (newRow.status !== 'APPROVED') {
-          // If status changed away from approved, remove from public list
+        if (!isRowApproved(newRow)) {
+          // If status changed away from approved or unpublished, remove from public list
           this.recitations = this.recitations.filter((r) => r.id !== newRow.id);
         } else {
           const mapped = this.mapRawRecitation(newRow);
@@ -1002,22 +1041,47 @@ export class SyncEngine {
   }
 
   // --------------------------------------------------------------------------
-  // 6. LIFECYCLE LISTENERS (Tab focus, network resume)
+  // 6. LIFECYCLE LISTENERS (Tab focus, visibility change, WebView resume)
   // --------------------------------------------------------------------------
   private initLifecycleListeners(): void {
     if (typeof window === 'undefined') return;
 
-    // Background sync on window focus (if > 30s since last sync)
+    // 1. Android WebView Resume & Tab Visibility Change (Primary standard for Android WebViews)
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        const last = this.metadata.lastSyncTimestamp;
+        const elapsed = last ? Date.now() - new Date(last).getTime() : Infinity;
+        // If empty or > 15s since last sync or cold resumed, trigger background sync
+        if (!this.recitations.length || elapsed > 15000) {
+          this.performBackgroundSync(elapsed > 300000); // force full if > 5 minutes
+        }
+        // Verify and reconnect Realtime if connection dropped while app was backgrounded
+        this.initRealtimeSubscriptions();
+      }
+    });
+
+    // 2. Window focus fallback
     window.addEventListener('focus', () => {
       const last = this.metadata.lastSyncTimestamp;
-      if (!last || Date.now() - new Date(last).getTime() > 30000) {
+      if (!last || Date.now() - new Date(last).getTime() > 20000) {
         this.performBackgroundSync();
       }
     });
 
-    // Background sync on online event
+    // 3. Online network recovery
     window.addEventListener('online', () => {
-      this.performBackgroundSync();
+      this.performBackgroundSync(true);
+      this.initRealtimeSubscriptions();
+    });
+
+    // 4. Android WebView Java Interface / postMessage Support (e.g. onResume, onPageFinished)
+    window.addEventListener('message', (event) => {
+      try {
+        const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+        if (data && (data.type === 'APP_RESUME' || data.type === 'REFRESH_DATA' || data.action === 'SYNC')) {
+          this.performBackgroundSync(true);
+        }
+      } catch {}
     });
   }
 
@@ -1154,14 +1218,34 @@ export class SyncEngine {
       }
     }
 
+    const reciter = this.reciters.find((r) => r.id === d.reciter_id);
+    const reciterName =
+      d.reciter_name ||
+      (reciter ? (reciter.isAnonymous && reciter.pseudonym ? reciter.pseudonym : reciter.displayName) : 'قارئ');
+    const reciterAvatar =
+      d.reciter_avatar ||
+      d.avatar_url ||
+      (reciter ? reciter.avatarUrl : undefined);
+    const reciterBannerUrl =
+      d.reciter_banner ||
+      d.banner_image_path ||
+      (reciter ? reciter.bannerUrl : undefined);
+    const reciterLogoUrl =
+      d.reciter_logo ||
+      d.logo_image_path ||
+      (reciter ? reciter.logoUrl : undefined);
+    const reciterCountry =
+      d.reciter_country ||
+      (reciter ? reciter.country : '');
+
     return {
       id: d.id,
       reciterId: d.reciter_id,
-      reciterName: d.reciter_name || 'قارئ',
-      reciterAvatar: SupabaseService.resolveImageUrl(d.reciter_avatar || d.avatar_url, 'profile-images'),
-      reciterBannerUrl: SupabaseService.resolveImageUrl(d.reciter_banner || d.banner_image_path, 'profile-images'),
-      reciterLogoUrl: SupabaseService.resolveImageUrl(d.reciter_logo || d.logo_image_path, 'profile-images'),
-      reciterCountry: d.reciter_country || '',
+      reciterName,
+      reciterAvatar: SupabaseService.resolveImageUrl(reciterAvatar, 'profile-images'),
+      reciterBannerUrl: SupabaseService.resolveImageUrl(reciterBannerUrl, 'profile-images'),
+      reciterLogoUrl: SupabaseService.resolveImageUrl(reciterLogoUrl, 'profile-images'),
+      reciterCountry,
       surahNumber: Number(d.surah_number) || 1,
       surahNameArabic: d.surah_name || d.surah_name_arabic || 'سورة',
       surahNameEnglish: d.surah_name_english || '',

@@ -1201,6 +1201,7 @@ class AdminServiceImpl {
         description: data.description || '',
         is_staff_pick: !!data.isStaffPick,
         status: data.status,
+        is_published: data.status === 'APPROVED',
         published_at: data.status === 'APPROVED' ? new Date().toISOString() : null
       })
     });
@@ -1258,6 +1259,7 @@ class AdminServiceImpl {
     if (data.isStaffPick !== undefined) payload.is_staff_pick = data.isStaffPick;
     if (data.status !== undefined) {
       payload.status = data.status;
+      payload.is_published = data.status === 'APPROVED';
       if (data.status === 'APPROVED') {
         payload.published_at = new Date().toISOString();
       }

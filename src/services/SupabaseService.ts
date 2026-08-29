@@ -44,7 +44,9 @@ export class SupabaseService {
     'apikey': SUPABASE_CONFIG.anonKey,
     'Authorization': `Bearer ${SUPABASE_CONFIG.anonKey}`,
     'Content-Type': 'application/json',
-    'Accept': 'application/json'
+    'Accept': 'application/json',
+    'Cache-Control': 'no-cache, no-store, must-revalidate',
+    'Pragma': 'no-cache'
   };
 
   private static signedUrlCache = new Map<string, { url: string; expiresAt: number }>();
@@ -658,10 +660,12 @@ export class SupabaseService {
   }
 
   static async fetchPublicReciters() {
+    const timestamp = Date.now();
     // Strategy 1: Try reciter_statistics_view for live counts and real score
     try {
-      const res = await fetch(`${SUPABASE_CONFIG.restBaseUrl}/reciter_statistics_view?select=*&order=created_at.desc`, {
-        headers: this.headers
+      const res = await fetch(`${SUPABASE_CONFIG.restBaseUrl}/reciter_statistics_view?select=*&order=created_at.desc&_t=${timestamp}`, {
+        headers: this.headers,
+        cache: 'no-store'
       });
       if (res.ok) {
         const data = await res.json();
@@ -675,31 +679,48 @@ export class SupabaseService {
 
     // Strategy 2: Fallback to public_reciters_view
     try {
-      const res = await fetch(`${SUPABASE_CONFIG.restBaseUrl}/public_reciters_view?select=*&order=created_at.desc`, {
-        headers: this.headers
+      const res = await fetch(`${SUPABASE_CONFIG.restBaseUrl}/public_reciters_view?select=*&order=created_at.desc&_t=${timestamp}`, {
+        headers: this.headers,
+        cache: 'no-store'
       });
-      if (!res.ok) {
-        console.warn(`Supabase fetchPublicReciters returned HTTP ${res.status}`);
-        return null;
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          return data;
+        }
       }
-      return await res.json();
     } catch (e) {
-      console.warn('Supabase fetchPublicReciters network error fallback to local', e);
-      return null;
+      console.warn('public_reciters_view bypassed, trying direct reciters table:', e);
     }
+
+    // Strategy 3: Direct reciters table query (resilience guarantee)
+    try {
+      const res = await fetch(`${SUPABASE_CONFIG.restBaseUrl}/reciters?is_published=eq.true&select=*&order=created_at.desc&_t=${timestamp}`, {
+        headers: this.headers,
+        cache: 'no-store'
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch (e) {
+      console.warn('Supabase direct reciters query fallback error:', e);
+    }
+
+    return null;
   }
 
   static async fetchPublicRecitations(reciterId?: string) {
+    const timestamp = Date.now();
     // Strategy 1: Try recitation_statistics_view for live counts
     try {
-      let url = `${SUPABASE_CONFIG.restBaseUrl}/recitation_statistics_view?select=*&order=published_at.desc`;
+      let url = `${SUPABASE_CONFIG.restBaseUrl}/recitation_statistics_view?select=*&order=published_at.desc&_t=${timestamp}`;
       if (reciterId) {
         url += `&reciter_id=eq.${encodeURIComponent(reciterId)}`;
       }
-      const res = await fetch(url, { headers: this.headers });
+      const res = await fetch(url, { headers: this.headers, cache: 'no-store' });
       if (res.ok) {
         const data = await res.json();
-        if (Array.isArray(data)) {
+        if (Array.isArray(data) && data.length > 0) {
           return data;
         }
       }
@@ -709,20 +730,70 @@ export class SupabaseService {
 
     // Strategy 2: Fallback to public_recitations_view
     try {
-      let url = `${SUPABASE_CONFIG.restBaseUrl}/public_recitations_view?select=*&order=published_at.desc`;
+      let url = `${SUPABASE_CONFIG.restBaseUrl}/public_recitations_view?select=*&order=published_at.desc&_t=${timestamp}`;
       if (reciterId) {
         url += `&reciter_id=eq.${encodeURIComponent(reciterId)}`;
       }
-      const res = await fetch(url, { headers: this.headers });
-      if (!res.ok) {
-        console.warn(`Supabase fetchPublicRecitations returned HTTP ${res.status}`);
-        return null;
+      const res = await fetch(url, { headers: this.headers, cache: 'no-store' });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          return data;
+        }
       }
-      return await res.json();
     } catch (e) {
-      console.warn('Supabase fetchPublicRecitations network error fallback to local', e);
-      return null;
+      console.warn('public_recitations_view bypassed, trying direct recitations table:', e);
     }
+
+    // Strategy 3: Direct recitations table query with joined reciters (resilience guarantee)
+    try {
+      let url = `${SUPABASE_CONFIG.restBaseUrl}/recitations?status=eq.APPROVED&select=*,reciters(id,display_name,profile_image_path,banner_image_path,logo_image_path,country,pseudonym,use_pseudonym,is_published)&order=published_at.desc&_t=${timestamp}`;
+      if (reciterId) {
+        url += `&reciter_id=eq.${encodeURIComponent(reciterId)}`;
+      }
+      const res = await fetch(url, { headers: this.headers, cache: 'no-store' });
+      if (res.ok) {
+        const rawRows = await res.json();
+        if (Array.isArray(rawRows)) {
+          return rawRows
+            .filter((r: any) => !r.reciters || r.reciters.is_published !== false)
+            .map((r: any) => {
+              const reciter = r.reciters || {};
+              const reciterName = (reciter.use_pseudonym && reciter.pseudonym) ? reciter.pseudonym : (reciter.display_name || 'قارئ');
+              return {
+                id: r.id,
+                reciter_id: r.reciter_id,
+                reciter_name: reciterName,
+                reciter_avatar: reciter.profile_image_path,
+                reciter_banner: reciter.banner_image_path,
+                reciter_logo: reciter.logo_image_path,
+                reciter_country: reciter.country,
+                surah_name: r.surah_name,
+                surah_number: r.surah_number,
+                ayah_start: r.ayah_start,
+                ayah_end: r.ayah_end,
+                riwayah: r.riwayah,
+                duration_seconds: r.duration_seconds,
+                audio_storage_path: r.audio_storage_path,
+                external_audio_url: r.external_audio_url,
+                cover_image_path: r.cover_image_path,
+                description: r.description,
+                status: r.status,
+                is_staff_pick: r.is_staff_pick,
+                published_at: r.published_at || r.created_at,
+                created_at: r.created_at,
+                updated_at: r.updated_at || r.created_at,
+                listen_count: r.listen_count || 0,
+                like_count: r.like_count || 0
+              };
+            });
+        }
+      }
+    } catch (e) {
+      console.warn('Supabase direct recitations query fallback error:', e);
+    }
+
+    return null;
   }
 
   static async fetchUserLikes(installationId: string): Promise<Set<string>> {

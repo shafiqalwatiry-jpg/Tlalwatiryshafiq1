@@ -1,11 +1,12 @@
 /**
  * Service Worker for Tilawatak Lil-Alem (تلاوتك للعالم)
  * Strategies:
- * - Static Assets & Audio / Images: Cache-First
- * - Supabase API / Dynamic data: Stale-While-Revalidate
+ * - Static Assets (HTML, JS, CSS, fonts, logos): Stale-While-Revalidate (GET only)
+ * - Audio & Media Assets: Cache-First (GET only)
+ * - Supabase REST / Auth / Dynamic API: Network-Only (NEVER cache dynamic data in SW to prevent stale state in WebView)
  */
 
-const CACHE_NAME = 'tilawatak-v2-cache';
+const CACHE_NAME = 'tilawatak-v3-cache';
 const AUDIO_CACHE_NAME = 'tilawatak-audio-cache';
 
 self.addEventListener('install', (event) => {
@@ -38,9 +39,27 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
+  // Only handle GET requests in Cache Storage; bypass everything else
+  if (event.request.method !== 'GET') {
+    return;
+  }
+
   const url = new URL(event.request.url);
 
-  // Audio files or images: Cache-First strategy
+  // 1. Supabase REST API, RPC, Auth, and Realtime: ALWAYS Network-Only (Bypass SW Cache)
+  // SyncEngine & DatabaseService in JavaScript handle enterprise offline and persistence
+  if (
+    url.hostname.includes('supabase.co') &&
+    (url.pathname.includes('/rest/') || url.pathname.includes('/auth/') || url.pathname.includes('/realtime/'))
+  ) {
+    return; // Let browser / WebView execute standard fresh network fetch
+  }
+
+  if (url.pathname.startsWith('/api/')) {
+    return; // Pass dynamic backend API directly to network
+  }
+
+  // 2. Audio & Media files: Cache-First strategy
   if (
     url.pathname.match(/\.(mp3|wav|m4a|aac|ogg|flac|mp4|webm|jpg|jpeg|png|webp|svg|ico)$/i) ||
     url.hostname.includes('supabase.co/storage')
@@ -50,11 +69,13 @@ self.addEventListener('fetch', (event) => {
         const cachedResponse = await cache.match(event.request);
         if (cachedResponse) {
           // Fetch update in background
-          fetch(event.request).then((networkResponse) => {
-            if (networkResponse && networkResponse.status === 200) {
-              cache.put(event.request, networkResponse.clone());
-            }
-          }).catch(() => {});
+          fetch(event.request)
+            .then((networkResponse) => {
+              if (networkResponse && networkResponse.status === 200 && networkResponse.type === 'basic') {
+                cache.put(event.request, networkResponse.clone());
+              }
+            })
+            .catch(() => {});
           return cachedResponse;
         }
 
@@ -72,37 +93,22 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Supabase REST API / Dynamic Data: Stale-While-Revalidate
-  if (url.hostname.includes('supabase.co') || url.pathname.startsWith('/api/')) {
-    event.respondWith(
-      caches.open(CACHE_NAME).then(async (cache) => {
-        const cachedResponse = await cache.match(event.request);
-        const fetchPromise = fetch(event.request).then((networkResponse) => {
-          if (networkResponse && networkResponse.status === 200) {
-            cache.put(event.request, networkResponse.clone());
-          }
-          return networkResponse;
-        }).catch(() => cachedResponse);
-
-        return cachedResponse || fetchPromise;
-      })
-    );
-    return;
-  }
-
-  // Default: Stale-While-Revalidate for app shell / navigation
+  // 3. Static App Shell (HTML, CSS, JS, fonts): Stale-While-Revalidate
   event.respondWith(
     caches.match(event.request).then((cachedResponse) => {
-      const fetchPromise = fetch(event.request).then((networkResponse) => {
-        if (networkResponse && networkResponse.status === 200) {
-          caches.open(CACHE_NAME).then((cache) => {
-            cache.put(event.request, networkResponse.clone());
-          });
-        }
-        return networkResponse;
-      }).catch(() => cachedResponse);
+      const fetchPromise = fetch(event.request)
+        .then((networkResponse) => {
+          if (networkResponse && networkResponse.status === 200 && networkResponse.type === 'basic') {
+            caches.open(CACHE_NAME).then((cache) => {
+              cache.put(event.request, networkResponse.clone());
+            });
+          }
+          return networkResponse;
+        })
+        .catch(() => cachedResponse);
 
       return cachedResponse || fetchPromise;
     })
   );
 });
+
